@@ -1,0 +1,6 @@
+{
+  "OutputPath": "/Users/songlihuang/temp/temp2/logs",
+  "Level": "",
+  "LogFileSize": 1024000,
+  "Rolling": 10
+}

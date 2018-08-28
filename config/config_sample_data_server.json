@@ -1,0 +1,6 @@
+{
+  "role":"DataServer",
+  "nameServers": "127.0.0.1:11223;127.0.0.1:11224;127.0.0.1:11225",
+  "dataPath": "/Users/songlihuang/temp/ybfs_data",
+  "dataLimit": "20G"
+}
