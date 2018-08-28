@@ -1,4 +1,4 @@
-package utils
+package bytes
 
 func CopyUint16ToBytes(val uint16, dest []byte, pos int) {
 	// Big-Endian
@@ -39,9 +39,7 @@ func GetUint32FromBytes(dest []byte, pos int) uint32 {
 }
 
 func CopyDataToBytes(src []byte, srcPos int, dest []byte, destPos int, len int) {
-	for i := 0; i < len; i++ {
-		dest[destPos+i] = src[srcPos+i]
-	}
+	copy(dest[destPos:destPos+len], src[srcPos:srcPos+len])
 }
 
 func IsDataEquals(src []byte, srcPos int, dest []byte, destPos int, len int) bool {

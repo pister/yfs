@@ -1,7 +1,8 @@
-package utils
+package bytes
 
 import (
 	"testing"
+	"fmt"
 )
 
 func TestCopyUint32ToBytes(t *testing.T) {
@@ -33,4 +34,10 @@ func TestCopyDataToBytes(t *testing.T) {
 	if !IsDataEquals(dest, 0, input, 0, len(input)) {
 		t.Fatal("fail")
 	}
+}
+
+
+func Test1(t *testing.T) {
+	bytes := []byte("12345678")
+	fmt.Println(string(bytes[2:5]))
 }
