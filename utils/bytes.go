@@ -1,24 +1,17 @@
-package bytes
+package utils
+
+import "encoding/binary"
 
 func CopyUint16ToBytes(val uint16, dest []byte, pos int) {
-	// Big-Endian
-	dest[pos] = byte(0xFF & (val >> 8))
-	dest[pos+1] = byte(0xFF & val)
+	binary.BigEndian.PutUint16(dest[pos:], val)
 }
 
 func GetUint16FromBytes(dest []byte, pos int) uint16 {
-	val := uint16(dest[pos])
-	val <<= 8
-	val |= uint16(dest[pos+1])
-	return val
+	return binary.BigEndian.Uint16(dest[pos:])
 }
 
 func CopyUint32ToBytes(val uint32, dest []byte, pos int) {
-	// Big-Endian
-	dest[pos] = byte(0xFF & (val >> 24))
-	dest[pos+1] = byte(0xFF & (val >> 16))
-	dest[pos+2] = byte(0xFF & (val >> 8))
-	dest[pos+3] = byte(0xFF & val)
+	binary.BigEndian.PutUint32(dest[pos:], val)
 }
 
 func Uint32ToBytes(val uint32) []byte {
@@ -28,14 +21,7 @@ func Uint32ToBytes(val uint32) []byte {
 }
 
 func GetUint32FromBytes(dest []byte, pos int) uint32 {
-	val := uint32(dest[pos])
-	val <<= 8
-	val |= uint32(dest[pos+1])
-	val <<= 8
-	val |= uint32(dest[pos+2])
-	val <<= 8
-	val |= uint32(dest[pos+3])
-	return val
+	return binary.BigEndian.Uint32(dest[pos:])
 }
 
 func CopyDataToBytes(src []byte, srcPos int, dest []byte, destPos int, len int) {

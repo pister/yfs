@@ -1,4 +1,4 @@
-package name
+package naming
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 
 func TestNewNameFromValue(t *testing.T) {
 	n := new(Name)
-	n.Position = 1234
+	n.Index = 1234
 	n.BlockId = 55
 	n.RegionId = 42
 	s := n.ToString()
@@ -16,7 +16,7 @@ func TestNewNameFromValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n1.Position != n.Position ||
+	if n1.Index != n.Index ||
 		n1.BlockId != n.BlockId ||
 		n1.RegionId != n.RegionId {
 			t.Fatal("fail")

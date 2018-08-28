@@ -4,6 +4,7 @@ import (
 	"strings"
 	"strconv"
 	"fmt"
+	"unsafe"
 )
 
 type RoleType int
@@ -34,9 +35,9 @@ type ServerConfig struct {
 func (config *Config) Parse() (*ParsedConfig, error) {
 	parsedConfig := new(ParsedConfig)
 	switch config.Role {
-	case "nameserver", "ns", "nameServer", "NameServer":
+	case "nameserver", "ns", "nameServer", "NameServer", "name":
 		parsedConfig.Role = RoleTypeNameServer
-	case "dataserver", "data", "dataServer", "DataServer":
+	case "dataserver", "data", "dataServer", "DataServer", "node":
 		parsedConfig.Role = RoleTypeDataServer
 	default:
 		return nil, fmt.Errorf("unknown role type: %s", config.Role)
@@ -49,7 +50,7 @@ func (config *Config) Parse() (*ParsedConfig, error) {
 	for _, part := range parts {
 		host := strings.Split(part, ":")
 		if len(host) < 1 {
-			return nil, fmt.Errorf("%s is not an hostname:port format.", part)
+			return nil, fmt.Errorf("%s is not an hostname:port format", part)
 		}
 		hostname := host[0]
 		port, err := strconv.Atoi(host[1])

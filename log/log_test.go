@@ -16,7 +16,7 @@ func TestNewLogger(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger.Info("hello")
-	logger.Info("hello: %s", " the name.")
+	logger.Info("hello: %s", " the naming.")
 }
 
 func TestWalk(t *testing.T) {

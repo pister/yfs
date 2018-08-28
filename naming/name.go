@@ -1,21 +1,21 @@
-package name
+package naming
 
 import (
 	"github.com/pister/yfs/utils"
 	"fmt"
 )
 
-// name 长度 12 字节， base64转成字符串的时候不需要额外填充，转成后长度为16字节
+// naming 长度 12 字节， base64转成字符串的时候不需要额外填充，转成后长度为16字节
 type Name struct {
-	Position uint32
-	BlockId  uint32
-	RegionId uint16
+	IndexPosition uint32
+	IndexBlockId  uint32
+	RegionId      uint16
 }
 
 func (name *Name) ToString() string {
 	buf := make([]byte, 12, 12)
-	utils.CopyUint32ToBytes(name.Position, buf, 0)
-	utils.CopyUint32ToBytes(name.BlockId, buf, 4)
+	utils.CopyUint32ToBytes(name.IndexPosition, buf, 0)
+	utils.CopyUint32ToBytes(name.IndexBlockId, buf, 4)
 	utils.CopyUint16ToBytes(name.RegionId, buf, 8)
 	sumValue := utils.SumHash16(buf[:10])
 	utils.CopyUint16ToBytes(sumValue, buf, 10)
@@ -33,8 +33,8 @@ func ParseNameFromString(strName string) (*Name, error) {
 		return nil, fmt.Errorf("sum validate fail")
 	}
 	name := new(Name)
-	name.Position = utils.GetUint32FromBytes(data, 0)
-	name.BlockId = utils.GetUint32FromBytes(data, 4)
+	name.IndexPosition = utils.GetUint32FromBytes(data, 0)
+	name.IndexBlockId = utils.GetUint32FromBytes(data, 4)
 	name.RegionId = utils.GetUint16FromBytes(data, 8)
 	return name, nil
 }

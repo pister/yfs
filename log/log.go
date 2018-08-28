@@ -221,7 +221,7 @@ func (cf *LoggerConfiguration) ensureLogDirExist() error {
 			return err
 		}
 		if !fi.IsDir() {
-			return fmt.Errorf("%s is an exist normal file, can not be use to log directory.", cf.OutputPath)
+			return fmt.Errorf("%s is an exist normal file, can not be use to log directory", cf.OutputPath)
 		}
 	} else {
 		if err = os.MkdirAll(cf.OutputPath, os.ModeDir|os.ModePerm); err != nil {
