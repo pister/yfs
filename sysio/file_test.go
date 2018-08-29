@@ -4,6 +4,8 @@ import (
 	"testing"
 	"fmt"
 	"os"
+	"sync/atomic"
+	"time"
 )
 
 func TestMkDirs(t *testing.T) {
@@ -36,3 +38,4 @@ func TestWriteAndRead(t *testing.T) {
 	}
 	fmt.Println(string(c))
 }
+

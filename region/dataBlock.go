@@ -1,97 +1,97 @@
 package region
 
 import (
-	"os"
 	"sync"
 	"fmt"
 	"github.com/pister/yfs/utils"
+	"io"
 )
 
 const (
-	dataMagicCode0     = 'D'
-	dataMagicCode1     = 'B'
-	dataFlagNormal     = 0
-	dataFlagDeleted    = 1
-	dataMaxBlockSize   = 128 * 1024 * 1024
-	dataHeaderLength   = 8
-	dataMetaDataLength = dataHeaderLength + 4
+	dataMagicCode0      = 'D'
+	dataMagicCode1      = 'B'
+	dataIndexMagicCode1 = 'J'
+	dataIndexMagicCode2 = 'K'
+	dataFlagNormal      = 0
+	dataFlagDeleted     = 1
+	dataMaxBlockSize    = 128 * 1024 * 1024
+	dataHeaderLength    = 8
+	dataMetaDataLength  = dataHeaderLength + 4
+	dataBlockFileName   = "block_data"
+	dataIndexFileName   = "block_index"
 )
 
-type dataIndex struct {
+type DataIndex struct {
 	blockId  uint32
 	position uint32
 }
 
-type positionIndex struct {
-	position    uint32
-	deletedFlag byte
-}
-
-type DataBlock struct {
+// 删除逻辑，只要data和index中其中有一个标记为deleted，就表示已经删除
+type BlockStore struct {
 	blockId       uint32
-	dataFile      os.File
-	indexFile     os.File
+	dataFile      *ReadWriteFile
+	indexFile     *ReadWriteFile
 	mutex         sync.Mutex
-	dataPosition  uint32
-	indexPosition uint32
+	// mapped cache may be very big, we will use bloom-filter instead in future
 	positionCache map[uint32]uint32 // dataPosition-> dataPosition fileChan's indexPosition
 }
 
-func NewBlockStore(fileDir string, index int) (*DataBlock, error) {
+func loadIndexCache(indexFile *ReadWriteFile) (map[uint32]uint32, error) {
+	// load cache
+	err := indexFile.SeekForReading(0, func(reader io.Reader) error {
+		buf := make([]byte, 8)
+		for {
+			n, err := reader.Read(buf)
+			if err != nil {
+				if err == io.EOF {
+					if n != 8 {
+						return fmt.Errorf("bad index data")
+					} else {
+						// process
+					}
+				} else {
+					return err
+				}
+			} else {
+				// process
+			}
+		}
+		return nil
+	})
 	// TODO
-	return nil, nil
+	return nil, err
 }
 
-func OpenBlockStore(fileDir string, index int) (*DataBlock, error) {
-	return nil, nil
-}
-
-func (bs *DataBlock) writeDataFile(data []byte) error {
-	_, err := bs.dataFile.Write(data)
+func OpenBlockStore(dataDir string, blockId uint32, concurrentSize int) (*BlockStore, error) {
+	dataBlock := new(BlockStore)
+	dataBlock.blockId = blockId
+	dataPath := fmt.Sprintf("%s/%s_%d", dataDir, dataBlockFileName, blockId)
+	indexPath := fmt.Sprintf("%s/%s_%d", dataDir, dataIndexFileName, blockId)
+	dataFile, err := OpenReadWriteFile(dataPath, concurrentSize)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	bs.dataPosition += uint32(len(data))
-	return nil
-}
-
-func (bs *DataBlock) writeIndexFile(data []byte) error {
-	_, err := bs.indexFile.Write(data)
+	indexFile, err := OpenReadWriteFile(indexPath, 1)
 	if err != nil {
-		return err
+		dataFile.Close()
+		return nil, err
 	}
-	bs.indexPosition += uint32(len(data))
-	return nil
+	dataBlock.dataFile = dataFile
+	dataBlock.indexFile = indexFile
+	dataBlock.positionCache = make(map[uint32]uint32)
+	// TODO loadIndexCache
+	return dataBlock, nil
 }
 
-func (bs *DataBlock) resetDataFile(pos uint32) error {
-	_, err := bs.dataFile.Seek(int64(pos), 0)
-	if err != nil {
-		return err
-	}
-	bs.dataPosition = pos
-	return nil
-}
-
-func (bs *DataBlock) deleteAtPositionFile(position uint32) {
-
-}
-
-func (bs *DataBlock) Add(data []byte) (dataIndex, error) {
-	if data == nil {
-		return dataIndex{}, fmt.Errorf("data is empty")
-	}
-	bs.mutex.Lock()
-	defer bs.mutex.Unlock()
+func (bs *BlockStore) writeData(data []byte) (DataIndex, error) {
 	dataLen := len(data)
 	fullLen := dataLen + dataMetaDataLength
-	dataPosition := bs.dataPosition
-	if uint32(fullLen)+dataPosition > dataMaxBlockSize {
-		return dataIndex{}, fmt.Errorf("not enough size for this region[%d]", bs.blockId)
+	if int64(fullLen)+bs.dataFile.GetFileLength() > dataMaxBlockSize {
+		return DataIndex{}, fmt.Errorf("not enough size for this region[%d]", bs.blockId)
 	}
-
 	dataSum := utils.SumHash32(data)
-	// =================== FORMAT START ==================
+	// =================== DATA FORMAT START ==================
+	// TOTAL 12 + len(data) bytes:
 	// 2 bytes magic code
 	// 4 bytes data len
 	// 1 bytes delete flag
@@ -100,9 +100,8 @@ func (bs *DataBlock) Add(data []byte) (dataIndex, error) {
 	// ----
 	// the real data finish ...
 	// 4 bytes sumHash
-	// =================== FORMAT END ====================
-
-	buf := make([]byte, fullLen, fullLen)
+	// =================== DATA FORMAT END  ====================
+	buf := make([]byte, fullLen)
 	// magic code
 	buf[0] = dataMagicCode0
 	buf[1] = dataMagicCode1
@@ -116,154 +115,159 @@ func (bs *DataBlock) Add(data []byte) (dataIndex, error) {
 	utils.CopyDataToBytes(data, 0, buf, 8, dataLen)
 	utils.CopyUint32ToBytes(dataSum, buf, dataLen+8)
 
-	err := bs.writeDataFile(buf)
+	dataPosition, err := bs.dataFile.Append(buf)
 	if err != nil {
-		bs.resetDataFile(dataPosition)
-		// how about when resetDataFile err ?
-		// here is just ignore
-		return dataIndex{}, err
+		return DataIndex{}, err
 	}
+	return DataIndex{blockId: bs.blockId, position: uint32(dataPosition)}, nil
+}
 
-	di := dataIndex{blockId: bs.blockId, position: uint32(dataPosition)}
-	// write finish
+func (bs *BlockStore) writeIndex(di DataIndex) error {
+	// =================== INDEX FORMAT START ==================
+	// TOTAL 8 bytes:
+	// 2 bytes magic code
+	// 1 byte delete flag
+	// 1 bytes reserved
+	// 4 bytes data position
+	// =================== INDEX FORMAT END   ==================
+	buf := make([]byte, 8)
+	buf[0] = dataIndexMagicCode1
+	buf[1] = dataIndexMagicCode2
+	buf[2] = dataFlagNormal
+	buf[3] = 0 // reserved
+	utils.CopyUint32ToBytes(di.position, buf, 4)
 
-	piBuf := make([]byte, 8, 8)
-	utils.CopyUint32ToBytes(di.position, piBuf, 0)
-	piBuf[4] = dataFlagNormal
-
-	indexPosition := bs.indexPosition
-	err = bs.writeIndexFile(piBuf)
+	indexPosition, err := bs.indexFile.Append(buf)
 	if err != nil {
-		bs.resetDataFile(dataPosition)
-		// how about when resetDataFile err ?
-		// here is just ignore
-		return dataIndex{}, err
+		// rollback data ?
+		return err
 	}
-	bs.positionCache[di.position] = indexPosition
+	bs.positionCache[di.position] = uint32(indexPosition)
+	return nil
+}
+
+func (bs *BlockStore) rollbackData(di DataIndex) error {
+	_, err := bs.dataFile.Seek(int64(di.position))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (bs *BlockStore) deleteData(di DataIndex) error {
+	// find index
+	indexPosition, exist := bs.positionCache[di.position]
+	if exist {
+		// delete at index
+		err := bs.indexFile.UpdateByteAt(int64(indexPosition+2), dataFlagDeleted)
+		if err != nil {
+			return err
+		}
+	}
+	// delete data
+	return bs.dataFile.UpdateByteAt(int64(di.position+6), dataFlagDeleted)
+}
+
+func (bs *BlockStore) Add(data []byte) (DataIndex, error) {
+	if data == nil {
+		return DataIndex{}, fmt.Errorf("data is empty")
+	}
+	bs.mutex.Lock()
+	defer bs.mutex.Unlock()
+
+	di, err := bs.writeData(data)
+	if err != nil {
+		return di, err
+	}
+	err = bs.writeIndex(di)
+	if err != nil {
+		// rollback data
+		bs.rollbackData(di)
+		// ignore result
+		return DataIndex{}, nil
+	}
 	return di, nil
 }
 
-func (bs *DataBlock) Delete(di dataIndex) error {
+func (bs *BlockStore) Delete(di DataIndex) error {
 	if bs.blockId != di.blockId {
 		return fmt.Errorf("blockId is not match")
 	}
 	if di.position >= dataMaxBlockSize-dataMetaDataLength {
 		return fmt.Errorf("invalidate dataPosition")
 	}
-	indexPosition, exist := bs.positionCache[di.position]
+	_, exist := bs.positionCache[di.position]
 	if !exist {
 		return nil // not exist!
 	}
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
 
-	_, err := bs.dataFile.Seek(int64(di.position), 0)
+	err := bs.deleteData(di)
 	if err != nil {
 		return err
 	}
-	header := make([]byte, dataHeaderLength, dataHeaderLength)
-	n, err := bs.dataFile.Read(header)
-	if err != nil {
-		return err
-	}
-	if n < dataHeaderLength {
-		return fmt.Errorf("need read %d bytes", dataHeaderLength)
-	}
-	if header[0] != dataMagicCode0 || header[1] != dataMagicCode1 {
-		return fmt.Errorf("invalidate dataPosition by check magic code fail")
-	}
-	dataLen := utils.GetUint32FromBytes(header, 2)
-	if dataLen > dataMaxBlockSize-di.position-4 {
-		return fmt.Errorf("invalidate data length")
-	}
-	deleteFlag := header[6]
-	if deleteFlag == dataFlagDeleted {
-		return nil
-	}
-	// Do Delete!
-	_, err = bs.dataFile.Seek(int64(di.position), 0)
-	if err != nil {
-		return err
-	}
-	// writeDataFile back
-	header[6] = dataFlagDeleted
-	n, err = bs.dataFile.Write(header)
-	if err != nil {
-		return err
-	}
-	if n < dataHeaderLength {
-		return fmt.Errorf("delete fail")
-	}
-
-	_, err = bs.indexFile.Seek(int64(indexPosition+4), 0)
-	if err != nil {
-		// FIXME 这里失败了没有回滚
-		return err
-	}
-	// TODO
-	//bs.indexFile.Write()
 	delete(bs.positionCache, di.position)
-
 	return nil
-
 }
 
-func (bs *DataBlock) Get(di dataIndex) ([]byte, error) {
+func (bs *BlockStore) Get(di DataIndex) ([]byte, error) {
 	if bs.blockId != di.blockId {
 		return nil, fmt.Errorf("blockId is not match")
 	}
 	if di.position >= dataMaxBlockSize-dataMetaDataLength {
 		return nil, fmt.Errorf("invalidate dataPosition")
 	}
-	_, exist := bs.positionCache[di.position]
-	if !exist  {
-		return nil, fmt.Errorf("not exist")
-	}
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
 
-	_, err := bs.dataFile.Seek(int64(di.position), 0)
-	if err != nil {
-		return nil, err
+	_, exist := bs.positionCache[di.position]
+	if !exist {
+		return nil, fmt.Errorf("not exist")
 	}
-	header := make([]byte, dataHeaderLength, dataHeaderLength)
-	n, err := bs.dataFile.Read(header)
-	if err != nil {
-		return nil, err
-	}
-	if n < dataHeaderLength {
-		return nil, fmt.Errorf("need read %d bytes", dataHeaderLength)
-	}
-	if header[0] != dataMagicCode0 || header[1] != dataMagicCode1 {
-		return nil, fmt.Errorf("invalidate dataPosition by check magic code fail")
-	}
-	dataLen := utils.GetUint32FromBytes(header, 2)
-	if dataLen > dataMaxBlockSize-di.position-4 {
-		return nil, fmt.Errorf("invalidate data length")
-	}
-	deleteFlag := header[6]
-	if deleteFlag == dataFlagDeleted {
-		return nil, fmt.Errorf("data not exist")
-	}
-	// include read sum hash
-	data := make([]byte, dataLen+4, dataLen+4)
-	n, err = bs.dataFile.Read(data)
-	if err != nil {
-		return nil, err
-	}
-	if n < 0 || uint32(n) < dataLen+4 {
-		return nil, fmt.Errorf("need read %d bytes", dataLen+4)
-	}
-	sumHashFromData := utils.GetUint32FromBytes(data, int(dataLen))
-	theData := data[:dataLen]
-	sumHashByCal := utils.SumHash32(theData)
-	if sumHashFromData != sumHashByCal {
-		return nil, fmt.Errorf("check sum fail")
-	}
+
+	header := make([]byte, dataHeaderLength)
+	var theData []byte
+	bs.dataFile.SeekForReading(int64(di.position), func(reader io.Reader) error {
+		n, err := reader.Read(header)
+		if err != nil {
+			return err
+		}
+		if n < dataHeaderLength {
+			return fmt.Errorf("need read %d bytes", dataHeaderLength)
+		}
+		if header[0] != dataMagicCode0 || header[1] != dataMagicCode1 {
+			return fmt.Errorf("invalidate dataPosition by check magic code fail")
+		}
+		dataLen := utils.GetUint32FromBytes(header, 2)
+		if dataLen > dataMaxBlockSize-di.position-4 {
+			return fmt.Errorf("invalidate data length")
+		}
+		deleteFlag := header[6]
+		if deleteFlag == dataFlagDeleted {
+			return fmt.Errorf("data not exist")
+		}
+		// include read sum hash
+		data := make([]byte, dataLen+4)
+		n, err = reader.Read(data)
+		if err != nil {
+			return err
+		}
+		if n < 0 || uint32(n) < dataLen+4 {
+			return fmt.Errorf("need read %d bytes", dataLen+4)
+		}
+		sumHashFromData := utils.GetUint32FromBytes(data, int(dataLen))
+		theData = data[:dataLen]
+		sumHashByCal := utils.SumHash32(theData)
+		if sumHashFromData != sumHashByCal {
+			return fmt.Errorf("check sum fail")
+		}
+		return nil
+	})
 	return theData, nil
 }
 
-func (bs *DataBlock) Exist(di dataIndex) (bool, error) {
+func (bs *BlockStore) Exist(di DataIndex) (bool, error) {
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
 	// TODO

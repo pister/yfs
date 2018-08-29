@@ -15,7 +15,7 @@ type IndexBlock struct {
 	position uint32
 	regionId uint16
 
-	readCache map[dataIndex]dataIndex // map[index]block
+	readCache map[DataIndex]DataIndex // map[index]block
 }
 
 const (
@@ -45,7 +45,7 @@ func (indexBlock *IndexBlock) reset(pos uint32) error {
 	return nil
 }
 
-func (indexBlock *IndexBlock) Add(di dataIndex) (*naming.Name, error) {
+func (indexBlock *IndexBlock) Add(di DataIndex) (*naming.Name, error) {
 	indexBlock.mutex.Lock()
 	defer indexBlock.mutex.Unlock()
 
@@ -88,22 +88,22 @@ func (indexBlock *IndexBlock) Add(di dataIndex) (*naming.Name, error) {
 	name.RegionId = indexBlock.regionId
 
 	// for read readCache
-	cacheKey := dataIndex{blockId: name.IndexBlockId, position: name.IndexPosition}
+	cacheKey := DataIndex{blockId: name.IndexBlockId, position: name.IndexPosition}
 	cacheValue := di
 	indexBlock.readCache[cacheKey] = cacheValue
 
 	return name, nil
 }
 
-func (indexBlock *IndexBlock) Get(name *naming.Name) (dataIndex, error) {
+func (indexBlock *IndexBlock) Get(name *naming.Name) (DataIndex, error) {
 	indexBlock.mutex.RLock()
 	defer indexBlock.mutex.RUnlock()
-	cacheKey := dataIndex{blockId: name.IndexBlockId, position: name.IndexPosition}
+	cacheKey := DataIndex{blockId: name.IndexBlockId, position: name.IndexPosition}
 	value, exist := indexBlock.readCache[cacheKey]
 	if exist {
 		return value, nil
 	}
-	return dataIndex{}, fmt.Errorf("not exist")
+	return DataIndex{}, fmt.Errorf("not exist")
 }
 
 func (indexBlock *IndexBlock) Delete(name *naming.Name) error {
@@ -163,7 +163,7 @@ func (indexBlock *IndexBlock) Delete(name *naming.Name) error {
 		return fmt.Errorf("delete index fail")
 	}
 	// remove from cache
-	cacheKey := dataIndex{blockId: name.IndexBlockId, position: name.IndexPosition}
+	cacheKey := DataIndex{blockId: name.IndexBlockId, position: name.IndexPosition}
 	delete(indexBlock.readCache, cacheKey)
 	return nil
 }

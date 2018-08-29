@@ -10,9 +10,9 @@ import (
 
 type Region struct {
 	writingIndexBlock []*IndexBlock
-	writingDataBlock  []*DataBlock
+	writingDataBlock  []*BlockStore
 	allIndexBlocks    map[uint32]*IndexBlock // map[index-block-id]*
-	allDataBlocks     map[uint32]*DataBlock  // map[data-block-id]*
+	allDataBlocks     map[uint32]*BlockStore // map[data-block-id]*
 	regionId          uint16
 	rootPath          string
 	regionPath        string
@@ -35,7 +35,7 @@ func NewRegion(regionId uint16, path string) (*Region, error) {
 	return region, nil
 }
 
-func (region *Region) getBlockToWrite(data []byte) (*IndexBlock, *DataBlock) {
+func (region *Region) getBlockToWrite(data []byte) (*IndexBlock, *BlockStore) {
 	sumHash := utils.SumHash32(data)
 	indexBlock := region.writingIndexBlock[sumHash%uint32(len(region.writingIndexBlock))]
 	dataBlock := region.writingDataBlock[sumHash%uint32(len(region.writingDataBlock))]
