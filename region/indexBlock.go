@@ -4,8 +4,9 @@ import (
 	"os"
 	"sync"
 	"github.com/pister/yfs/naming"
-	"github.com/pister/yfs/utils"
 	"fmt"
+	"github.com/pister/yfs/common/bytesutil"
+	"github.com/pister/yfs/common/hashutil"
 )
 
 type IndexBlock struct {
@@ -68,12 +69,12 @@ func (indexBlock *IndexBlock) Add(di DataIndex) (*naming.Name, error) {
 	// delete flag
 	buf[1] = indexFlagNormal
 	// data region id
-	utils.CopyUint32ToBytes(uint32(di.blockId), buf, 2)
+	bytesutil.CopyUint32ToBytes(uint32(di.blockId), buf, 2)
 	// data dataPosition
-	utils.CopyUint32ToBytes(uint32(di.position), buf, 6)
+	bytesutil.CopyUint32ToBytes(uint32(di.position), buf, 6)
 	// sum16 of (data-region-id and data-dataPosition)
-	sumVal := utils.SumHash16(buf[2:10])
-	utils.CopyUint16ToBytes(sumVal, buf, 10)
+	sumVal := hashutil.SumHash16(buf[2:10])
+	bytesutil.CopyUint16ToBytes(sumVal, buf, 10)
 
 	err := indexBlock.write(buf)
 	if err != nil {
@@ -130,18 +131,18 @@ func (indexBlock *IndexBlock) Delete(name *naming.Name) error {
 		return err
 	}
 	if n < indexItemLength {
-		return  fmt.Errorf("need read %d bytes", indexItemLength)
+		return fmt.Errorf("need read %d bytes", indexItemLength)
 	}
 	if buf[0] != indexMagicCode {
 		return fmt.Errorf("invalidate dataPosition by check magic code fail")
 	}
 
-	dataPosition := utils.GetUint32FromBytes(buf, 6)
-	if dataPosition > dataMaxBlockSize-dataMetaDataLength {
+	dataPosition := bytesutil.GetUint32FromBytes(buf, 6)
+	if dataPosition > dataMaxBlockSize-dataHeaderLength {
 		return fmt.Errorf("invalidate dataPosition")
 	}
-	sumFromData := utils.GetUint16FromBytes(buf, 10)
-	sumByCal := utils.SumHash16(buf[2:10])
+	sumFromData := bytesutil.GetUint16FromBytes(buf, 10)
+	sumByCal := hashutil.SumHash16(buf[2:10])
 	if sumFromData != sumByCal {
 		return fmt.Errorf("check sum fail")
 	}

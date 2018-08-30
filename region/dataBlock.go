@@ -3,8 +3,10 @@ package region
 import (
 	"sync"
 	"fmt"
-	"github.com/pister/yfs/utils"
 	"io"
+	"github.com/pister/yfs/common/bloom"
+	"github.com/pister/yfs/common/bytesutil"
+	"github.com/pister/yfs/common/hashutil"
 )
 
 const (
@@ -15,8 +17,7 @@ const (
 	dataFlagNormal      = 0
 	dataFlagDeleted     = 1
 	dataMaxBlockSize    = 128 * 1024 * 1024
-	dataHeaderLength    = 8
-	dataMetaDataLength  = dataHeaderLength + 4
+	dataHeaderLength    = 12
 	dataBlockFileName   = "block_data"
 	dataIndexFileName   = "block_index"
 )
@@ -26,40 +27,120 @@ type DataIndex struct {
 	position uint32
 }
 
-// 删除逻辑，只要data和index中其中有一个标记为deleted，就表示已经删除
-type BlockStore struct {
-	blockId       uint32
-	dataFile      *ReadWriteFile
-	indexFile     *ReadWriteFile
-	mutex         sync.Mutex
-	// mapped cache may be very big, we will use bloom-filter instead in future
-	positionCache map[uint32]uint32 // dataPosition-> dataPosition fileChan's indexPosition
+type dataHeader struct {
+	buf []byte
 }
 
-func loadIndexCache(indexFile *ReadWriteFile) (map[uint32]uint32, error) {
+func (header *dataHeader) isValidate() bool {
+	if len(header.buf) != dataHeaderLength {
+		return false
+	}
+	if header.buf[0] != dataMagicCode0 || header.buf[1] != dataMagicCode1 {
+		return false
+	}
+	return true
+}
+
+func (header *dataHeader) isDeleted() bool {
+	return header.buf[6] == dataFlagDeleted
+}
+
+// 删除逻辑，只要data和index中其中有一个标记为deleted，就表示已经删除
+type BlockStore struct {
+	blockId   uint32
+	dataFile  *ReadWriteFile
+	indexFile *ReadWriteFile
+	mutex     sync.Mutex
+	// mapped cache may be very big, we will use bloom-filter instead in future
+	// positionCache map[uint32]uint32 // dataPosition-> dataPosition fileChan's indexPosition
+	positionFilter bloom.Filter
+}
+
+func processForLoadIndex(buf []byte, filter bloom.Filter, dataFile *ReadWriteFile) error {
+	if buf[0] != dataIndexMagicCode1 || buf[1] != dataIndexMagicCode2 {
+		return fmt.Errorf("magic not match")
+	}
+	sumFromData := buf[3]
+	sumFromCal := hashutil.SumHash8(buf[4:8])
+	if sumFromData != sumFromCal {
+		return fmt.Errorf("hash sum not match")
+	}
+	if buf[2] == dataFlagDeleted {
+		// deleted
+		return nil
+	}
+	position := bytesutil.GetUint32FromBytes(buf, 4)
+
+	var normal = false
+	// if not delete, to find at block
+	dataFile.SeekForReading(int64(position), func(reader io.Reader) error {
+		dataBuf := make([]byte, 12)
+		_, err := reader.Read(dataBuf)
+		if err != nil {
+			return err
+		}
+		dataHeader := dataHeader{buf:dataBuf}
+		if !dataHeader.isValidate() {
+			return nil
+		}
+		if !dataHeader.isDeleted() {
+			normal = true
+		}
+		return nil
+	})
+	if normal {
+		filter.Add(buf[4:8])
+	}
+	return nil
+}
+
+func reloadIndexCache(dataFile *ReadWriteFile, indexFile *ReadWriteFile) (bloom.Filter, error) {
+	filter := bloom.NewSafeBloomFilter(1024 * 100)
 	// load cache
 	err := indexFile.SeekForReading(0, func(reader io.Reader) error {
 		buf := make([]byte, 8)
 		for {
-			n, err := reader.Read(buf)
+			_, err := reader.Read(buf)
 			if err != nil {
 				if err == io.EOF {
+					/*
 					if n != 8 {
 						return fmt.Errorf("bad index data")
 					} else {
 						// process
+						err := processForLoadIndex(buf, filter, dataFile)
+						if err != nil {
+							return err
+						}
 					}
+					*/
+					return nil
 				} else {
 					return err
 				}
 			} else {
 				// process
+				err := processForLoadIndex(buf, filter, dataFile)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
-	// TODO
-	return nil, err
+	return filter, err
+}
+
+func (dataFile *ReadWriteFile) isDataDeleted(position uint32) (bool, error) {
+	buf := make([]byte, 12)
+	_, err := dataFile.SeekAndReadData(int64(position), buf)
+	if err != nil {
+		return false, err
+	}
+	if buf[0] != dataMagicCode0 || buf[1] != dataMagicCode1 {
+		return false, fmt.Errorf("magic code not match")
+	}
+	return buf[6] == dataFlagDeleted, nil
 }
 
 func OpenBlockStore(dataDir string, blockId uint32, concurrentSize int) (*BlockStore, error) {
@@ -78,43 +159,49 @@ func OpenBlockStore(dataDir string, blockId uint32, concurrentSize int) (*BlockS
 	}
 	dataBlock.dataFile = dataFile
 	dataBlock.indexFile = indexFile
-	dataBlock.positionCache = make(map[uint32]uint32)
-	// TODO loadIndexCache
+	filter, err := reloadIndexCache(dataFile, indexFile)
+	if err != nil {
+		return nil, err
+	}
+	dataBlock.positionFilter = filter
 	return dataBlock, nil
+}
+
+func (bs *BlockStore) testPositionMayExist(position uint32) bool {
+	data := bytesutil.Uint32ToBytes(position)
+	return bs.positionFilter.Hit(data)
 }
 
 func (bs *BlockStore) writeData(data []byte) (DataIndex, error) {
 	dataLen := len(data)
-	fullLen := dataLen + dataMetaDataLength
+	fullLen := dataLen + dataHeaderLength
 	if int64(fullLen)+bs.dataFile.GetFileLength() > dataMaxBlockSize {
 		return DataIndex{}, fmt.Errorf("not enough size for this region[%d]", bs.blockId)
 	}
-	dataSum := utils.SumHash32(data)
+	dataSum := hashutil.SumHash32(data)
 	// =================== DATA FORMAT START ==================
 	// TOTAL 12 + len(data) bytes:
 	// 2 bytes magic code
 	// 4 bytes data len
 	// 1 bytes delete flag
 	// 1 bytes reserved
+	// 4 bytes sumHash
 	// the real data begin ...
 	// ----
 	// the real data finish ...
-	// 4 bytes sumHash
 	// =================== DATA FORMAT END  ====================
 	buf := make([]byte, fullLen)
 	// magic code
 	buf[0] = dataMagicCode0
 	buf[1] = dataMagicCode1
 	// data len
-	utils.CopyUint32ToBytes(uint32(dataLen), buf, 2)
+	bytesutil.CopyUint32ToBytes(uint32(dataLen), buf, 2)
 	// delete flag
 	buf[6] = dataFlagNormal
 	// reserved
 	buf[7] = 0
-
-	utils.CopyDataToBytes(data, 0, buf, 8, dataLen)
-	utils.CopyUint32ToBytes(dataSum, buf, dataLen+8)
-
+	bytesutil.CopyUint32ToBytes(dataSum, buf, 8)
+	bytesutil.CopyDataToBytes(data, 0, buf, 12, dataLen)
 	dataPosition, err := bs.dataFile.Append(buf)
 	if err != nil {
 		return DataIndex{}, err
@@ -127,22 +214,22 @@ func (bs *BlockStore) writeIndex(di DataIndex) error {
 	// TOTAL 8 bytes:
 	// 2 bytes magic code
 	// 1 byte delete flag
-	// 1 bytes reserved
+	// 1 bytes hash-sum
 	// 4 bytes data position
 	// =================== INDEX FORMAT END   ==================
 	buf := make([]byte, 8)
 	buf[0] = dataIndexMagicCode1
 	buf[1] = dataIndexMagicCode2
 	buf[2] = dataFlagNormal
-	buf[3] = 0 // reserved
-	utils.CopyUint32ToBytes(di.position, buf, 4)
+	bytesutil.CopyUint32ToBytes(di.position, buf, 4)
+	buf[3] = hashutil.SumHash8(buf[4:8]) // hash-sum
 
-	indexPosition, err := bs.indexFile.Append(buf)
+	_, err := bs.indexFile.Append(buf)
 	if err != nil {
 		// rollback data ?
 		return err
 	}
-	bs.positionCache[di.position] = uint32(indexPosition)
+	bs.positionFilter.Add(bytesutil.Uint32ToBytes(di.position))
 	return nil
 }
 
@@ -155,15 +242,11 @@ func (bs *BlockStore) rollbackData(di DataIndex) error {
 }
 
 func (bs *BlockStore) deleteData(di DataIndex) error {
-	// find index
-	indexPosition, exist := bs.positionCache[di.position]
-	if exist {
-		// delete at index
-		err := bs.indexFile.UpdateByteAt(int64(indexPosition+2), dataFlagDeleted)
-		if err != nil {
-			return err
-		}
+	if !bs.testPositionMayExist(di.position) {
+		// not exist
+		return nil
 	}
+	// here not update delete flag in index file, because of update index file is very slow
 	// delete data
 	return bs.dataFile.UpdateByteAt(int64(di.position+6), dataFlagDeleted)
 }
@@ -193,13 +276,10 @@ func (bs *BlockStore) Delete(di DataIndex) error {
 	if bs.blockId != di.blockId {
 		return fmt.Errorf("blockId is not match")
 	}
-	if di.position >= dataMaxBlockSize-dataMetaDataLength {
+	if di.position >= dataMaxBlockSize-dataHeaderLength {
 		return fmt.Errorf("invalidate dataPosition")
 	}
-	_, exist := bs.positionCache[di.position]
-	if !exist {
-		return nil // not exist!
-	}
+
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
 
@@ -207,24 +287,22 @@ func (bs *BlockStore) Delete(di DataIndex) error {
 	if err != nil {
 		return err
 	}
-	delete(bs.positionCache, di.position)
 	return nil
 }
 
 func (bs *BlockStore) Get(di DataIndex) ([]byte, error) {
+	if !bs.testPositionMayExist(di.position) {
+		// not exist
+		return nil, fmt.Errorf("not exist")
+	}
 	if bs.blockId != di.blockId {
 		return nil, fmt.Errorf("blockId is not match")
 	}
-	if di.position >= dataMaxBlockSize-dataMetaDataLength {
+	if di.position >= dataMaxBlockSize-dataHeaderLength {
 		return nil, fmt.Errorf("invalidate dataPosition")
 	}
 	bs.mutex.Lock()
 	defer bs.mutex.Unlock()
-
-	_, exist := bs.positionCache[di.position]
-	if !exist {
-		return nil, fmt.Errorf("not exist")
-	}
 
 	header := make([]byte, dataHeaderLength)
 	var theData []byte
@@ -239,7 +317,7 @@ func (bs *BlockStore) Get(di DataIndex) ([]byte, error) {
 		if header[0] != dataMagicCode0 || header[1] != dataMagicCode1 {
 			return fmt.Errorf("invalidate dataPosition by check magic code fail")
 		}
-		dataLen := utils.GetUint32FromBytes(header, 2)
+		dataLen := bytesutil.GetUint32FromBytes(header, 2)
 		if dataLen > dataMaxBlockSize-di.position-4 {
 			return fmt.Errorf("invalidate data length")
 		}
@@ -247,18 +325,18 @@ func (bs *BlockStore) Get(di DataIndex) ([]byte, error) {
 		if deleteFlag == dataFlagDeleted {
 			return fmt.Errorf("data not exist")
 		}
+		sumHashFromData := bytesutil.GetUint32FromBytes(header, 8)
 		// include read sum hash
-		data := make([]byte, dataLen+4)
+		data := make([]byte, dataLen)
 		n, err = reader.Read(data)
 		if err != nil {
 			return err
 		}
-		if n < 0 || uint32(n) < dataLen+4 {
+		if n < 0 || uint32(n) < dataLen {
 			return fmt.Errorf("need read %d bytes", dataLen+4)
 		}
-		sumHashFromData := utils.GetUint32FromBytes(data, int(dataLen))
 		theData = data[:dataLen]
-		sumHashByCal := utils.SumHash32(theData)
+		sumHashByCal := hashutil.SumHash32(theData)
 		if sumHashFromData != sumHashByCal {
 			return fmt.Errorf("check sum fail")
 		}

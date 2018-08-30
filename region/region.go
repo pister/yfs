@@ -2,10 +2,10 @@ package region
 
 import (
 	"github.com/pister/yfs/naming"
-	"github.com/pister/yfs/utils"
 	"fmt"
 	"github.com/pister/yfs/sysio"
 	"path/filepath"
+	"github.com/pister/yfs/common/hashutil"
 )
 
 type Region struct {
@@ -36,7 +36,7 @@ func NewRegion(regionId uint16, path string) (*Region, error) {
 }
 
 func (region *Region) getBlockToWrite(data []byte) (*IndexBlock, *BlockStore) {
-	sumHash := utils.SumHash32(data)
+	sumHash := hashutil.SumHash32(data)
 	indexBlock := region.writingIndexBlock[sumHash%uint32(len(region.writingIndexBlock))]
 	dataBlock := region.writingDataBlock[sumHash%uint32(len(region.writingDataBlock))]
 	return indexBlock, dataBlock
