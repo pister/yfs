@@ -5,7 +5,7 @@ import (
 	"os"
 	"encoding/json"
 	"io"
-	"github.com/pister/yfs/sysio"
+	"github.com/pister/yfs/common/ioutil"
 	"fmt"
 	"sync"
 	"time"
@@ -210,7 +210,7 @@ func (cf *LoggerConfiguration) ensureLogDirExist() error {
 	if stdoutPath == cf.OutputPath {
 		return nil
 	}
-	exists, err := sysio.PathExists(cf.OutputPath)
+	exists, err := ioutil.PathExists(cf.OutputPath)
 	if err != nil {
 		return nil
 	}

@@ -1,4 +1,4 @@
-package sysio
+package ioutil
 
 import (
 	"os"

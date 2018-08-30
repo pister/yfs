@@ -3,7 +3,7 @@ package region
 import (
 	"github.com/pister/yfs/naming"
 	"fmt"
-	"github.com/pister/yfs/sysio"
+	"github.com/pister/yfs/common/ioutil"
 	"path/filepath"
 	"github.com/pister/yfs/common/hashutil"
 )
@@ -19,12 +19,12 @@ type Region struct {
 }
 
 func NewRegion(regionId uint16, path string) (*Region, error) {
-	err := sysio.MkDirs(path)
+	err := ioutil.MkDirs(path)
 	if err != nil {
 		return nil, err
 	}
 	regionPath := fmt.Sprintf("%s%cregion-%d", path, filepath.Separator, regionId)
-	err = sysio.MkDirs(regionPath)
+	err = ioutil.MkDirs(regionPath)
 	if err != nil {
 		return nil, err
 	}

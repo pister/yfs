@@ -1,11 +1,9 @@
-package sysio
+package ioutil
 
 import (
 	"testing"
 	"fmt"
 	"os"
-	"sync/atomic"
-	"time"
 )
 
 func TestMkDirs(t *testing.T) {
