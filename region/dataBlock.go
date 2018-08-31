@@ -79,7 +79,7 @@ func processForLoadIndex(buf []byte, filter bloom.Filter, dataFile *ReadWriteFil
 		if err != nil {
 			return err
 		}
-		dataHeader := dataHeader{buf:dataBuf}
+		dataHeader := dataHeader{buf: dataBuf}
 		if !dataHeader.isValidate() {
 			return nil
 		}
@@ -103,17 +103,6 @@ func reloadIndexCache(dataFile *ReadWriteFile, indexFile *ReadWriteFile) (bloom.
 			_, err := reader.Read(buf)
 			if err != nil {
 				if err == io.EOF {
-					/*
-					if n != 8 {
-						return fmt.Errorf("bad index data")
-					} else {
-						// process
-						err := processForLoadIndex(buf, filter, dataFile)
-						if err != nil {
-							return err
-						}
-					}
-					*/
 					return nil
 				} else {
 					return err
@@ -167,16 +156,26 @@ func OpenBlockStore(dataDir string, blockId uint32, concurrentSize int) (*BlockS
 	return dataBlock, nil
 }
 
+func (bs *BlockStore) Close() error {
+	defer bs.dataFile.Close()
+	defer bs.indexFile.Close()
+	return nil
+}
+
 func (bs *BlockStore) testPositionMayExist(position uint32) bool {
 	data := bytesutil.Uint32ToBytes(position)
 	return bs.positionFilter.Hit(data)
+}
+
+func (bs *BlockStore) AvailableRate() float32 {
+	return (dataMaxBlockSize - float32(bs.dataFile.GetFileLength())) / dataMaxBlockSize
 }
 
 func (bs *BlockStore) writeData(data []byte) (DataIndex, error) {
 	dataLen := len(data)
 	fullLen := dataLen + dataHeaderLength
 	if int64(fullLen)+bs.dataFile.GetFileLength() > dataMaxBlockSize {
-		return DataIndex{}, fmt.Errorf("not enough size for this region[%d]", bs.blockId)
+		return DataIndex{}, fmt.Errorf("not enough size for this data block[%d]", bs.blockId)
 	}
 	dataSum := hashutil.SumHash32(data)
 	// =================== DATA FORMAT START ==================
