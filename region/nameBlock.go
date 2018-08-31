@@ -32,9 +32,8 @@ func initReadCache(nameBlockId uint32, file *ReadWriteFile) (*maputil.SafeMap, e
 	err := file.SeekForReading(0, func(reader io.Reader) error {
 		namePosition := 0
 		buf := make([]byte, 12)
-		for {
-			n, err := reader.Read(buf)
-			namePosition += n
+		for ; ; namePosition += 12 {
+			_, err := reader.Read(buf)
 			if err != nil {
 				if err == io.EOF {
 					return nil
@@ -42,7 +41,6 @@ func initReadCache(nameBlockId uint32, file *ReadWriteFile) (*maputil.SafeMap, e
 					return err
 				}
 			} else {
-				// process
 				if buf[0] != nameMagicCode {
 					return fmt.Errorf("magic code not match")
 				}
