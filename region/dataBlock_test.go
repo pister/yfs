@@ -7,7 +7,7 @@ import (
 )
 
 func TestOpenBlockStore(t *testing.T) {
-	blockStore, err := OpenBlockStore("/Users/songlihuang/temp/temp3/block_test", 1, 2)
+	blockStore, err := OpenDataBlock("/Users/songlihuang/temp/temp3/block_test", 1, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ type finishDataIndex struct {
 }
 
 func TestOpenBlockStoreMultiRoutine(t *testing.T) {
-	blockStore, err := OpenBlockStore("/Users/songlihuang/temp/temp3/block_test", 3, 3)
+	blockStore, err := OpenDataBlock("/Users/songlihuang/temp/temp3/block_test", 3, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestOpenBlockStoreMultiRoutine(t *testing.T) {
 
 
 func TestBlockStore_Delete(t *testing.T) {
-	blockStore, err := OpenBlockStore("/Users/songlihuang/temp/temp3/block_test", 1, 2)
+	blockStore, err := OpenDataBlock("/Users/songlihuang/temp/temp3/block_test", 1, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

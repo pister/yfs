@@ -9,15 +9,15 @@ import (
 
 // naming 长度 12 字节， base64转成字符串的时候不需要额外填充，转成后长度为16字节
 type Name struct {
-	IndexPosition uint32
-	IndexBlockId  uint32
-	RegionId      uint16
+	NamePosition uint32
+	NameBlockId  uint32
+	RegionId     uint16
 }
 
 func (name *Name) ToString() string {
 	buf := make([]byte, 12, 12)
-	bytesutil.CopyUint32ToBytes(name.IndexPosition, buf, 0)
-	bytesutil.CopyUint32ToBytes(name.IndexBlockId, buf, 4)
+	bytesutil.CopyUint32ToBytes(name.NamePosition, buf, 0)
+	bytesutil.CopyUint32ToBytes(name.NameBlockId, buf, 4)
 	bytesutil.CopyUint16ToBytes(name.RegionId, buf, 8)
 	sumValue := hashutil.SumHash16(buf[:10])
 	bytesutil.CopyUint16ToBytes(sumValue, buf, 10)
@@ -35,8 +35,8 @@ func ParseNameFromString(strName string) (*Name, error) {
 		return nil, fmt.Errorf("sum validate fail")
 	}
 	name := new(Name)
-	name.IndexPosition = bytesutil.GetUint32FromBytes(data, 0)
-	name.IndexBlockId = bytesutil.GetUint32FromBytes(data, 4)
+	name.NamePosition = bytesutil.GetUint32FromBytes(data, 0)
+	name.NameBlockId = bytesutil.GetUint32FromBytes(data, 4)
 	name.RegionId = bytesutil.GetUint16FromBytes(data, 8)
 	return name, nil
 }

@@ -63,6 +63,26 @@ func NewSafeMap(hashFunc ...HashFunc) *SafeMap {
 	return sm
 }
 
+func (m *SafeMap) Length() int {
+	nLen := len(m.dataShards)
+	lenChan := make(chan int, nLen)
+	for i, shard := range m.dataShards {
+		mutex := m.mutexShards[i]
+		shardT := shard
+		go func() {
+			mutex.Lock()
+			defer mutex.Unlock()
+			n := len(shardT)
+			lenChan <- n
+		}()
+	}
+	sum := 0
+	for i := 0; i < nLen; i++ {
+		sum += <- lenChan
+	}
+	return sum
+}
+
 func (m *SafeMap) hashForKey(key interface{}) uint32 {
 	return m.hashFunc(key)
 }

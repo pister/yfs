@@ -11,12 +11,16 @@ import (
 	"strings"
 	"strconv"
 	"math/rand"
+	"github.com/pister/yfs/common/maputil"
 )
 
 const (
-	regionGrowSize                 = 4
-	regionBlockConcurrentReadSize  = 3
-	regionMayGrowThresholdForGroup = 0.2
+	regionDataGrowSize                 = 4
+	regionNameGrowSize                 = 2
+	regionDataBlockConcurrentReadSize  = 3
+	regionNameBlockConcurrentReadSize  = 4
+	regionDataMayGrowThresholdForGroup = 0.2
+	regionNameMayGrowThresholdForGroup = 0.2
 )
 
 type Region struct {
@@ -24,11 +28,11 @@ type Region struct {
 	rootPath   string
 	regionPath string
 
-	nameBlocks map[uint32]*NameBlock  // map[index-block-id]*
-	dataBlocks map[uint32]*BlockStore // map[data-block-id]*
+	nameBlocks *maputil.SafeMap // map[index-block-id]*
+	dataBlocks *maputil.SafeMap // map[data-block-id]*
 }
 
-func NewRegion(regionId uint16, path string) (*Region, error) {
+func OpenRegion(regionId uint16, path string) (*Region, error) {
 	err := ioutil.MkDirs(path)
 	if err != nil {
 		return nil, err
@@ -39,21 +43,73 @@ func NewRegion(regionId uint16, path string) (*Region, error) {
 		return nil, err
 	}
 
+	dataBlocks, err := initDataBlocks(regionPath)
+	if err != nil {
+		return nil, err
+	}
+	nameBlocks, err := initNameBlocks(regionId, regionPath)
+	if err != nil {
+		dataBlocks.Foreach(func(key interface{}, value interface{}) (stop bool) {
+			value.(*NameBlock).Close()
+			return false
+		})
+		return nil, err
+	}
+
 	region := new(Region)
 	region.rootPath = path
 	region.regionPath = regionPath
 	region.regionId = regionId
 
-	dataBlocks, err := initDataBlocks(regionPath)
-	if err != nil {
-		return nil, err
-	}
 	region.dataBlocks = dataBlocks
-	// TODO init nameBlocks
+	region.nameBlocks = nameBlocks
+
 	return region, nil
 }
 
-func initDataBlocks(regionPath string) (map[uint32]*BlockStore, error) {
+func initNameBlocks(regionId uint16, regionPath string) (*maputil.SafeMap, error) {
+	nameBlocNamePattern, err := regexp.Compile(`name_block_\d+`)
+	if err != nil {
+		return nil, err
+	}
+	nameBlockFiles := maputil.NewSafeMap()
+	err = filepath.Walk(regionPath, func(file string, info os.FileInfo, err error) error {
+		_, name := path.Split(file)
+		if nameBlocNamePattern.MatchString(name) {
+			post := strings.LastIndex(name, "_")
+			blockId, err := strconv.Atoi(name[post+1:])
+			if err != nil {
+				return err
+			}
+			nameBlockFile, err := OpenNameBlock(regionId, regionPath, uint32(blockId), regionNameBlockConcurrentReadSize)
+			if err != nil {
+				return err
+			}
+			nameBlockFiles.Put(uint32(blockId), nameBlockFile)
+		}
+		return nil
+	})
+	if err != nil {
+		nameBlockFiles.Foreach(func(key interface{}, value interface{}) (stop bool) {
+			value.(*NameBlock).Close()
+			return false
+		})
+		return nil, err
+	}
+	if nameBlockFiles.Length() <= 0 {
+		// create init data
+		for blockId := 0; blockId < regionNameGrowSize; blockId++ {
+			nameBlock, err := OpenNameBlock(regionId, regionPath, uint32(blockId), regionDataBlockConcurrentReadSize)
+			if err != nil {
+				return nil, err
+			}
+			nameBlockFiles.Put(blockId, nameBlock)
+		}
+	}
+	return nameBlockFiles, nil
+}
+
+func initDataBlocks(regionPath string) (*maputil.SafeMap, error) {
 	blockDataNamePattern, err := regexp.Compile(`block_data_\d+`)
 	if err != nil {
 		return nil, err
@@ -86,51 +142,101 @@ func initDataBlocks(regionPath string) (map[uint32]*BlockStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	blockStores := make(map[uint32]*BlockStore)
+	dataBlocks := maputil.NewSafeMap()
 	for blockId := range blockDataNames {
 		_, exist := blockIndexNames[blockId]
 		if !exist {
 			continue
 		}
-		bs, err := OpenBlockStore(regionPath, blockId, regionBlockConcurrentReadSize)
+		bs, err := OpenDataBlock(regionPath, blockId, regionDataBlockConcurrentReadSize)
 		if err != nil {
 			return nil, err
 		}
-		blockStores[blockId] = bs
+		dataBlocks.Put(blockId, bs)
 	}
-	return blockStores, nil
+	if dataBlocks.Length() <= 0 {
+		// create init data
+		for blockId := 0; blockId < regionDataGrowSize; blockId++ {
+			dataBlock, err := OpenDataBlock(regionPath, uint32(blockId), regionDataBlockConcurrentReadSize)
+			if err != nil {
+				return nil, err
+			}
+			dataBlocks.Put(blockId, dataBlock)
+		}
+	}
+	return dataBlocks, nil
 }
 
-func (region *Region) growUp() {
+func (region *Region) growUpDataBlock() {
 	// TODO
 	// async task
 }
 
-func (region *Region) getBlockToWrite(data []byte) (*NameBlock, *BlockStore) {
-	bestAvailableBlocks := make([]*BlockStore, 0, 4)
-	for _, dataBlock := range region.dataBlocks {
-		if dataBlock.AvailableRate() > regionMayGrowThresholdForGroup {
+func (region *Region) growUpNameBlock() {
+	// TODO
+	// async task
+}
+
+func (region *Region) getNameBlockToWrite() *NameBlock {
+	bestAvailableBlocks := make([]*NameBlock, 0, 2)
+	region.nameBlocks.Foreach(func(key interface{}, value interface{}) (stop bool) {
+		nameBlock := value.(*NameBlock)
+		if nameBlock.AvailableRate() > regionNameMayGrowThresholdForGroup {
+			bestAvailableBlocks = append(bestAvailableBlocks, nameBlock)
+		}
+		return false
+	})
+	if len(bestAvailableBlocks) < regionNameGrowSize {
+		// grow up
+		region.growUpNameBlock()
+	}
+	nLen := int32(len(bestAvailableBlocks))
+	return bestAvailableBlocks[rand.Int31n(nLen)]
+}
+
+func (region *Region) getDataBlockToWrite(data []byte) (*DataBlock) {
+	bestAvailableBlocks := make([]*DataBlock, 0, 4)
+	region.dataBlocks.Foreach(func(key interface{}, value interface{}) (stop bool) {
+		dataBlock := value.(*DataBlock)
+		if dataBlock.AvailableRate() > regionDataMayGrowThresholdForGroup {
 			bestAvailableBlocks = append(bestAvailableBlocks, dataBlock)
 		}
-	}
-	if len(bestAvailableBlocks) < regionGrowSize {
-		// grow up
-		region.growUp()
-	}
-	i := rand.Int31n(int32(len(bestAvailableBlocks)))
-	dataBlock := bestAvailableBlocks[i]
+		return false
+	})
 
-	// TODO nameBlock
-	return nil, dataBlock
+	if len(bestAvailableBlocks) < regionDataGrowSize {
+		// grow up
+		region.growUpDataBlock()
+	}
+	nLen := int32(len(bestAvailableBlocks))
+	dataBlock := bestAvailableBlocks[rand.Int31n(nLen)]
+	return dataBlock
+}
+
+func (region *Region) Close() error {
+	defer func() {
+		region.dataBlocks.Foreach(func(key interface{}, value interface{}) (stop bool) {
+			value.(*DataBlock).Close()
+			return false
+		})
+	}()
+	defer func() {
+		region.nameBlocks.Foreach(func(key interface{}, value interface{}) (stop bool) {
+			value.(*NameBlock).Close()
+			return false
+		})
+	}()
+	return nil
 }
 
 func (region *Region) Add(data []byte) (*naming.Name, error) {
-	indexBlock, dataBlock := region.getBlockToWrite(data)
+	dataBlock := region.getDataBlockToWrite(data)
+	nameBlock := region.getNameBlockToWrite()
 	di, err := dataBlock.Add(data)
 	if err != nil {
 		return nil, err
 	}
-	name, err := indexBlock.Add(di)
+	name, err := nameBlock.Add(di)
 	if err != nil {
 		dataBlock.Delete(di)
 		// ignore delete error
@@ -140,30 +246,30 @@ func (region *Region) Add(data []byte) (*naming.Name, error) {
 }
 
 func (region *Region) Get(name *naming.Name) ([]byte, error) {
-	indexBlock, exist := region.nameBlocks[name.IndexBlockId]
+	nameBlock, exist := region.nameBlocks.Get(name.NameBlockId)
 	if !exist {
 		return nil, fmt.Errorf("index block not found")
 	}
-	bi, exist, err := indexBlock.Get(name)
+	bi, exist, err := nameBlock.(*NameBlock).Get(name)
 	if err != nil {
 		return nil, err
 	}
 	if !exist {
 		return nil, nil
 	}
-	dataBlock, exist := region.dataBlocks[bi.blockId]
+	dataBlock, exist := region.dataBlocks.Get(bi.blockId)
 	if !exist {
 		return nil, nil
 	}
-	return dataBlock.Get(bi)
+	return dataBlock.(*DataBlock).Get(bi)
 }
 
 func (region *Region) Delete(name *naming.Name) error {
-	indexBlock, exist := region.nameBlocks[name.IndexBlockId]
+	nameBlock, exist := region.nameBlocks.Get(name.NameBlockId)
 	if !exist {
-		return fmt.Errorf("index block not found")
+		return nil
 	}
-	bi, exist, err := indexBlock.Get(name)
+	bi, exist, err := nameBlock.(*NameBlock).Get(name)
 	if err != nil {
 		return err
 	}
@@ -171,14 +277,14 @@ func (region *Region) Delete(name *naming.Name) error {
 		return nil
 	}
 	// 1, delete for data block
-	dataBlock, exist := region.dataBlocks[bi.blockId]
+	dataBlock, exist := region.dataBlocks.Get(bi.blockId)
 	if !exist {
-		return fmt.Errorf("data block not found")
+		return nil
 	}
-	err = dataBlock.Delete(bi)
+	err = dataBlock.(*DataBlock).Delete(bi)
 	if err != nil {
 		return err
 	}
 	// 2, delete fro index block
-	return indexBlock.Delete(name)
+	return nameBlock.(*NameBlock).Delete(name)
 }

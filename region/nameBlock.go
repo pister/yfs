@@ -86,17 +86,21 @@ func OpenNameBlock(regionId uint16, dataDir string, blockId uint32, concurrentSi
 	return nameBlock, nil
 }
 
-func (indexBlock *NameBlock) Close() error {
-	indexBlock.file.Close()
+func (nameBlock *NameBlock) AvailableRate() float32 {
+	return (nameMaxBlockSize - float32(nameBlock.file.GetFileLength())) / nameMaxBlockSize
+}
+
+func (nameBlock *NameBlock) Close() error {
+	nameBlock.file.Close()
 	return nil
 }
 
-func (indexBlock *NameBlock) Add(di DataIndex) (*naming.Name, error) {
-	indexBlock.mutex.Lock()
-	defer indexBlock.mutex.Unlock()
+func (nameBlock *NameBlock) Add(di DataIndex) (*naming.Name, error) {
+	nameBlock.mutex.Lock()
+	defer nameBlock.mutex.Unlock()
 
-	if nameItemLength+indexBlock.file.GetFileLength() > nameMaxBlockSize {
-		return nil, fmt.Errorf("not enough size for this name block[%d]", indexBlock.blockId)
+	if nameItemLength+nameBlock.file.GetFileLength() > nameMaxBlockSize {
+		return nil, fmt.Errorf("not enough size for this name block[%d]", nameBlock.blockId)
 	}
 
 	// =================== FORMAT START ==================
@@ -121,54 +125,54 @@ func (indexBlock *NameBlock) Add(di DataIndex) (*naming.Name, error) {
 	sumVal := hashutil.SumHash16(buf[4:12])
 	bytesutil.CopyUint16ToBytes(sumVal, buf, 2)
 
-	namePosition, err := indexBlock.file.Append(buf)
+	namePosition, err := nameBlock.file.Append(buf)
 	if err != nil {
 		return nil, err
 	}
 	name := new(naming.Name)
-	name.IndexBlockId = indexBlock.blockId
-	name.IndexPosition = uint32(namePosition)
-	name.RegionId = indexBlock.regionId
+	name.NameBlockId = nameBlock.blockId
+	name.NamePosition = uint32(namePosition)
+	name.RegionId = nameBlock.regionId
 
 	// for read readCache
-	cacheKey := fmt.Sprintf("%d-%d", name.IndexBlockId, name.IndexPosition)
+	cacheKey := fmt.Sprintf("%d-%d", name.NameBlockId, name.NamePosition)
 	cacheValue := di
-	indexBlock.readCache.Put(cacheKey, cacheValue)
+	nameBlock.readCache.Put(cacheKey, cacheValue)
 	return name, nil
 }
 
-func (indexBlock *NameBlock) Get(name *naming.Name) (DataIndex, bool, error) {
-	indexBlock.mutex.Lock()
-	defer indexBlock.mutex.Unlock()
+func (nameBlock *NameBlock) Get(name *naming.Name) (DataIndex, bool, error) {
+	nameBlock.mutex.Lock()
+	defer nameBlock.mutex.Unlock()
 
-	cacheKey := fmt.Sprintf("%d-%d", name.IndexBlockId, name.IndexPosition)
-	value, exist := indexBlock.readCache.Get(cacheKey)
+	cacheKey := fmt.Sprintf("%d-%d", name.NameBlockId, name.NamePosition)
+	value, exist := nameBlock.readCache.Get(cacheKey)
 	if exist {
 		return value.(DataIndex), true, nil
 	}
 	return DataIndex{}, false, nil
 }
 
-func (indexBlock *NameBlock) Delete(name *naming.Name) error {
-	if indexBlock.regionId != name.RegionId {
+func (nameBlock *NameBlock) Delete(name *naming.Name) error {
+	if nameBlock.regionId != name.RegionId {
 		return fmt.Errorf("regionId not match")
 	}
-	if indexBlock.blockId != name.IndexBlockId {
+	if nameBlock.blockId != name.NameBlockId {
 		return fmt.Errorf("indexBlockId not match")
 	}
 
-	indexBlock.mutex.Lock()
-	defer indexBlock.mutex.Unlock()
+	nameBlock.mutex.Lock()
+	defer nameBlock.mutex.Unlock()
 
-	if name.IndexPosition >= nameMaxBlockSize-nameItemLength {
+	if name.NamePosition >= nameMaxBlockSize-nameItemLength {
 		return fmt.Errorf("invalidate dataPosition")
 	}
-	err := indexBlock.file.UpdateByteAt(int64(name.IndexPosition+1), nameFlagDeleted)
+	err := nameBlock.file.UpdateByteAt(int64(name.NamePosition+1), nameFlagDeleted)
 	if err != nil {
 		return err
 	}
 	// remove from cache
-	cacheKey := fmt.Sprintf("%d-%d", name.IndexBlockId, name.IndexPosition)
-	indexBlock.readCache.Delete(cacheKey)
+	cacheKey := fmt.Sprintf("%d-%d", name.NameBlockId, name.NamePosition)
+	nameBlock.readCache.Delete(cacheKey)
 	return nil
 }

@@ -43,6 +43,7 @@ func TestSafeMap2(t *testing.T) {
 		fmt.Println(key, "=>", value)
 		return false
 	})
+	fmt.Println(m.Length())
 }
 
 func TestSafeMapMultiRoutines(t *testing.T) {
