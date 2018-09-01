@@ -14,7 +14,7 @@ type Name struct {
 	RegionId     uint16
 }
 
-func (name *Name) ToString() string {
+func (name *Name) String() string {
 	buf := make([]byte, 12, 12)
 	bytesutil.CopyUint32ToBytes(name.NamePosition, buf, 0)
 	bytesutil.CopyUint32ToBytes(name.NameBlockId, buf, 4)

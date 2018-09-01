@@ -28,7 +28,7 @@ func TestOpenRegion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Println(name.ToString())
+	fmt.Println(name.String())
 	data, err := region.Get(name)
 	if err != nil {
 		t.Fatal(err)

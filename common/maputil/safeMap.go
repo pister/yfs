@@ -1,5 +1,7 @@
 package maputil
 
+// the multi-goroutine safe map
+
 import (
 	"sync"
 	"github.com/pister/yfs/common/hashutil"
@@ -107,18 +109,18 @@ func (m *SafeMap) Put(key interface{}, value interface{}) {
 
 type resultObject struct {
 	value interface{}
-	exist bool
+	found bool
 }
 
-func (m *SafeMap) Get(key interface{}) (value interface{}, exist bool) {
+func (m *SafeMap) Get(key interface{}) (value interface{}, found bool) {
 	result := m.execute(key, nil, func(shardMap map[interface{}]interface{}, key interface{}, value interface{}) interface{} {
-		v, ok := shardMap[key]
+		v, found := shardMap[key]
 		result := new(resultObject)
 		result.value = v
-		result.exist = ok
+		result.found = found
 		return result
 	}).(*resultObject)
-	return result.value, result.exist
+	return result.value, result.found
 }
 
 func (m *SafeMap) Delete(key interface{}) {

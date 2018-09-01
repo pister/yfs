@@ -10,7 +10,7 @@ func TestNewNameFromValue(t *testing.T) {
 	n.Index = 1234
 	n.BlockId = 55
 	n.RegionId = 42
-	s := n.ToString()
+	s := n.String()
 	fmt.Println(s)
 	n1, err := ParseNameFromString(s)
 	if err != nil {

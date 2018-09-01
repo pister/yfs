@@ -16,7 +16,7 @@ func TestNameBlock1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Println(name.ToString())
+	fmt.Println(name.String())
 	di, exist, err := nameBlock.Get(name)
 	if err != nil {
 		t.Fatal(err)
