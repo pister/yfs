@@ -49,7 +49,7 @@ type Tree struct {
 // Node is a single element within the tree
 type Node struct {
 	Key    []byte
-	Value  []byte
+	Value  interface{}
 	color  color
 	Left   *Node
 	Right  *Node
@@ -67,7 +67,7 @@ func NewTree(comparator... Comparator) *Tree {
 
 // Put inserts node into the tree.
 // Key should adhere to the comparator's type assertion, otherwise method panics.
-func (tree *Tree) Put(key []byte, value []byte) {
+func (tree *Tree) Put(key []byte, value interface{}) {
 	var insertedNode *Node
 	if tree.Root == nil {
 		tree.Root = &Node{Key: key, Value: value, color: red}
@@ -109,7 +109,7 @@ func (tree *Tree) Put(key []byte, value []byte) {
 // Get searches the node in the tree by key and returns its value or nil if key is not found in tree.
 // Second return parameter is true if key was found, otherwise false.
 // Key should adhere to the comparator's type assertion, otherwise method panics.
-func (tree *Tree) Get(key []byte) (value []byte, found bool) {
+func (tree *Tree) Get(key []byte) (value interface{}, found bool) {
 	node := tree.lookup(key)
 	if node != nil {
 		return node.Value, true
@@ -615,7 +615,7 @@ between:
 
 // Value returns the current element's value.
 // Does not modify the state of the iterator.
-func (iterator *Iterator) Value() []byte {
+func (iterator *Iterator) Value() interface{} {
 	return iterator.node.Value
 }
 

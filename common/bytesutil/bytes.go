@@ -14,6 +14,10 @@ func CopyUint32ToBytes(val uint32, dest []byte, pos int) {
 	binary.BigEndian.PutUint32(dest[pos:], val)
 }
 
+func CopyUint64ToBytes(val uint64, dest []byte, pos int) {
+	binary.BigEndian.PutUint64(dest[pos:], val)
+}
+
 func Uint32ToBytes(val uint32) []byte {
 	dest := make([]byte, 4, 4)
 	CopyUint32ToBytes(val, dest, 0)
@@ -22,6 +26,10 @@ func Uint32ToBytes(val uint32) []byte {
 
 func GetUint32FromBytes(dest []byte, pos int) uint32 {
 	return binary.BigEndian.Uint32(dest[pos:])
+}
+
+func GetUint64FromBytes(dest []byte, pos int) uint64 {
+	return binary.BigEndian.Uint64(dest[pos:])
 }
 
 func CopyDataToBytes(src []byte, srcPos int, dest []byte, destPos int, len int) {
