@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewConcurrentFileReader(t *testing.T) {
-	reader, err := openAsConcurrentReadFile("readWriteFile_test.go", 3)
+	reader, err := OpenAsConcurrentReadFile("readWriteFile_test.go", 3)
 	if err != nil {
 		t.Fatal(err)
 	}

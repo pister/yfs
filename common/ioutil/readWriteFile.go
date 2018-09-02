@@ -18,7 +18,7 @@ type PositionWriteFile struct {
 }
 
 
-func openAsConcurrentReadFile(path string, concurrentSize int) (*ConcurrentReadFile, error) {
+func OpenAsConcurrentReadFile(path string, concurrentSize int) (*ConcurrentReadFile, error) {
 	cfReader := new(ConcurrentReadFile)
 	cfReader.size = concurrentSize
 	cfReader.fileChan = make(chan *os.File, concurrentSize)
@@ -81,7 +81,7 @@ func (cfReader *ConcurrentReadFile) Close() error {
 	return nil
 }
 
-func openAsPositionWriteFile(path string) (*PositionWriteFile, error) {
+func OpenAsPositionWriteFile(path string) (*PositionWriteFile, error) {
 	pfWriter := new(PositionWriteFile)
 	pfWriter.fileChan = make(chan *os.File, 1)
 	// here does not use O_APPEND flag because of if it is used, Seek function will be not work.
@@ -170,11 +170,11 @@ type ReadWriteFile struct {
 func OpenReadWriteFile(path string, concurrentSize int) (*ReadWriteFile, error) {
 	readWriteFile := new(ReadWriteFile)
 	readWriteFile.path = path
-	writer, err := openAsPositionWriteFile(path)
+	writer, err := OpenAsPositionWriteFile(path)
 	if err != nil {
 		return nil, err
 	}
-	reader, err := openAsConcurrentReadFile(path, concurrentSize)
+	reader, err := OpenAsConcurrentReadFile(path, concurrentSize)
 	if err != nil {
 		writer.Close()
 		return nil, err

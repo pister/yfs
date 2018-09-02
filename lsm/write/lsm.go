@@ -8,11 +8,44 @@ import (
 )
 
 type AheadLog struct {
-	file *os.File
+	file     *os.File
+	closed   bool
+	filename string
 }
 
 func (wal *AheadLog) Append(action *Action) error {
 	return action.WriteTo(wal.file)
+}
+
+func (wal *AheadLog) Close() error {
+	if wal.closed {
+		return nil
+	}
+	if err := wal.file.Close(); err != nil {
+		return err
+	}
+	wal.closed = true
+	return nil
+}
+
+func (wal *AheadLog) RenameToTemp() error {
+	if err := wal.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(wal.filename, wal.filename + "_tmp"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (wal *AheadLog) Delete() error {
+	if err := wal.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(wal.filename); err != nil {
+		return err
+	}
+	return nil
 }
 
 const (
@@ -80,6 +113,12 @@ func (lsm *Lsm) Delete(key []byte) error {
 	return nil
 }
 
+type dataIndex struct {
+	key       []byte
+	deleted   byte
+	dataIndex uint32
+}
+
 func (lsm *Lsm) FlushAndClose() error {
 	lsm.flushMutex.Lock()
 	defer lsm.flushMutex.Unlock()
@@ -88,28 +127,81 @@ func (lsm *Lsm) FlushAndClose() error {
 	if err != nil {
 		return err
 	}
+
 	/*
-	data1,
-	data2,
+	the sstable data format:
+	block-data-0
+	block-data-1
+	block-data-2
 	...
-	dataN
-	key-dataIndex1,  <- key-dataIndex-start-pos
-	key-dataIndex2,
+	block-data-N
+	data-index-0    <- data-index-start-position
+	data-index-1
+	data-index-2
+	....
+	key-data-index-N
+	key-index-0			<- key-index-start-position
+	key-index-1
+	key-index-2
 	...
-	key-dataIndexN
-	key-dataIndex-start-pos
-	*/
-
-	// 2, write
-
-	lsm.memMap.Foreach(func(key []byte, value interface{}) {
-		dataIndex, err := sstable.WriteData(key, value.(*Data))
+	key-index-N
+	footer:data-index-start-position,key-index-start-position
+	 */
+	dataLength := lsm.memMap.Length()
+	// 2, write data
+	dataIndexes := make([]*dataIndex, 0, dataLength)
+	lsm.memMap.Foreach(func(key []byte, value interface{}) bool {
+		data := value.(*Data)
+		dataIndex, e := sstable.WriteData(key, data)
+		if e != nil {
+			err = e
+			return true
+		}
+		dataIndexes = append(dataIndexes, &dataIndex{key, data.deleted, dataIndex})
+		return false
 	})
+	if err != nil {
+		return err
+	}
+	// 3, write data index
+	keyIndexes := make([]uint32, 0, dataLength)
+	for _, di := range dataIndexes {
+		keyIndex, err := sstable.WriteDataIndex(di.key, di.deleted, di.dataIndex)
+		if err != nil {
+			return err
+		}
+		keyIndexes = append(keyIndexes, keyIndex)
+	}
+	dataIndexStartPosition := keyIndexes[0]
+	var keyIndexStartPosition uint32 := 0
+	// 4, write key index
+	for _, keyIndex := range keyIndexes {
+		p, err := sstable.writeKeyIndex(keyIndex)
+		if err != nil {
+			return err
+		}
+		if keyIndexStartPosition == 0 {
+			keyIndexStartPosition = p
+		}
+	}
+	// writer footer
+	if err := sstable.WriteFooter(dataIndexStartPosition, keyIndexStartPosition); err != nil {
+		return err
+	}
 
-
-	// 3, add index, footer etc...
-
+	if err := lsm.aheadLog.RenameToTemp(); err != nil {
+		return err
+	}
+	if err := sstable.Close(); err != nil {
+		return err
+	}
 	// 4, delete WAL log
-
-	// 5, release and close resources.
+	if err := lsm.aheadLog.Delete(); err != nil {
+		return err
+	}
+	// 5, rename
+	if err := sstable.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
