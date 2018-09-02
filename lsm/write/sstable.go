@@ -4,7 +4,6 @@ import (
 	"os"
 	"github.com/pister/yfs/common/bytesutil"
 	"github.com/pister/yfs/common/hashutil"
-	"github.com/gogo/protobuf/test/data"
 )
 
 type SSTableWriter struct {

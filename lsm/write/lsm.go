@@ -152,12 +152,12 @@ func (lsm *Lsm) FlushAndClose() error {
 	dataIndexes := make([]*dataIndex, 0, dataLength)
 	lsm.memMap.Foreach(func(key []byte, value interface{}) bool {
 		data := value.(*Data)
-		dataIndex, e := sstable.WriteData(key, data)
+		index, e := sstable.WriteData(key, data)
 		if e != nil {
 			err = e
 			return true
 		}
-		dataIndexes = append(dataIndexes, &dataIndex{key, data.deleted, dataIndex})
+		dataIndexes = append(dataIndexes, &dataIndex{key, data.deleted, index})
 		return false
 	})
 	if err != nil {
@@ -173,7 +173,7 @@ func (lsm *Lsm) FlushAndClose() error {
 		keyIndexes = append(keyIndexes, keyIndex)
 	}
 	dataIndexStartPosition := keyIndexes[0]
-	var keyIndexStartPosition uint32 := 0
+	var keyIndexStartPosition uint32 = 0
 	// 4, write key index
 	for _, keyIndex := range keyIndexes {
 		p, err := sstable.writeKeyIndex(keyIndex)
