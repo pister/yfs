@@ -345,32 +345,32 @@ type dataIndex struct {
 	dataIndex uint32
 }
 
-func (lsm *Lsm) FlushAndClose() error {
+func (lsm *Lsm) FlushAndClose() (string, error) {
 	lsm.flushMutex.Lock()
 	defer lsm.flushMutex.Unlock()
 	sst, err := NewSSTableWriter(lsm.dir, sstLevelA, lsm.ts)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if err := sst.WriteMemMap(lsm.memMap); err != nil {
-		return err
+		return "", err
 	}
 
 	if err := lsm.aheadLog.RenameToTemp(); err != nil {
-		return err
+		return "", err
 	}
 	if err := sst.Close(); err != nil {
-		return err
+		return "", err
 	}
 	// 4, delete WAL log
 	if err := lsm.aheadLog.DeleteTemp(); err != nil {
-		return err
+		return "", err
 	}
 	// 5, rename
 	if err := sst.Commit(); err != nil {
-		return err
+		return "", err
 	}
 	// 6, make bloom-filter as key cache
-	return nil
+	return sst.fileName, nil
 }

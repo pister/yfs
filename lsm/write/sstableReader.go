@@ -27,11 +27,10 @@ func OpenSSTableReader(sstFile string) (*SSTableReader, error) {
 		return nil, err
 	}
 
-	dataIndexStartPosition, err := readFooter(r)
-	if err != nil {
+	if _, err := readFooter(r); err != nil {
 		return nil, err
 	}
-	filter, err := readDataIndexAsFilter(dataIndexStartPosition, r, bloomBitSizeFromLevel(level))
+	filter, err := readDataIndexAsFilter(r, bloomBitSizeFromLevel(level))
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +40,7 @@ func OpenSSTableReader(sstFile string) (*SSTableReader, error) {
 	return reader, nil
 }
 
-func readDataIndexAsFilter(dataIndexStartPosition uint32, r *ioutil.ConcurrentReadFile, bloomBitSize uint32) (bloom.Filter, error) {
+func readDataIndexAsFilter(r *ioutil.ConcurrentReadFile, bloomBitSize uint32) (bloom.Filter, error) {
 	/*
 	2 - bytes magic code
 	1 - byte delete flag
@@ -54,19 +53,19 @@ func readDataIndexAsFilter(dataIndexStartPosition uint32, r *ioutil.ConcurrentRe
 	bytes for data
 	*/
 	filter := bloom.NewUnsafeBloomFilter(bloomBitSize)
-	err := r.SeekForReading(int64(dataIndexStartPosition), func(reader io.Reader) error {
+	err := r.SeekForReading(0, func(reader io.Reader) error {
 		for {
 			header := make([]byte, 24)
 			if _, err := reader.Read(header); err != nil {
 				return err
 			}
-			if header[0] != dataIndexMagicCode1 || header[1] != dataIndexMagicCode2 {
-				return fmt.Errorf("data index magic code not match")
-			}
 			// header[2] // delete flag, not use here
-			if header[3] != blockTypeDataIndex {
+			if header[3] != blockTypeData {
 				// end
 				return nil
+			}
+			if header[0] != dataMagicCode1 || header[1] != dataMagicCode2 {
+				return fmt.Errorf("data index magic code not match")
 			}
 			// header[4:8] // dataIndex not use here
 			// dataSum := bytesutil.GetUint32FromBytes(header, 4)

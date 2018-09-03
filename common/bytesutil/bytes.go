@@ -19,7 +19,7 @@ func CopyUint64ToBytes(val uint64, dest []byte, pos int) {
 }
 
 func Uint32ToBytes(val uint32) []byte {
-	dest := make([]byte, 4, 4)
+	dest := make([]byte, 4)
 	CopyUint32ToBytes(val, dest, 0)
 	return dest
 }

@@ -98,7 +98,7 @@ func TestWalOpenAndFlush(t *testing.T) {
 	} else {
 		fmt.Println("not found")
 	}
-	err = lsm.FlushAndClose()
+	_, err = lsm.FlushAndClose()
 	if err != nil {
 		t.Fatal(err)
 	}
