@@ -342,7 +342,6 @@ func (lsm *Lsm) Get(key []byte) ([]byte, bool) {
 
 type dataIndex struct {
 	key       []byte
-	deleted   deletedFlag
 	dataIndex uint32
 }
 
