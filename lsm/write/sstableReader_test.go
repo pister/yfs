@@ -7,8 +7,6 @@ import (
 	"github.com/pister/yfs/common/ioutil"
 )
 
-
-
 func TestSSTableReader_GetByKey(t *testing.T) {
 	tempDir := "/Users/songlihuang/temp/temp3/sstable_test"
 	ioutil.MkDirs(tempDir)
@@ -17,17 +15,8 @@ func TestSSTableReader_GetByKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = lsm.Put([]byte("name1"), []byte("value111"))
-	err = lsm.Put([]byte("name2"), []byte("value222"))
-	err = lsm.Put([]byte("name3"), []byte("value333"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, found := lsm.Get([]byte("name2"))
-	if found {
-		fmt.Println(string(v))
-	} else {
-		fmt.Println("not found")
+	for i := 0; i < 1000; i++ {
+		lsm.Put([]byte(fmt.Sprintf("name-%d", i)), []byte(fmt.Sprintf("value-%d", i)))
 	}
 	fileName, err := lsm.FlushAndClose()
 	if err != nil {
@@ -38,9 +27,21 @@ func TestSSTableReader_GetByKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := reader.GetByKey([]byte("name2"))
-	if err != nil {
-		t.Fatal(err)
+	for i := 500; i < 1100 ; i++ {
+		data, err := reader.GetByKey([]byte(fmt.Sprintf("name-%d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data == nil {
+			fmt.Println(fmt.Sprintf("name-%d", i), "not found")
+			continue
+		}
+
+		if data.deleted == deleted {
+			fmt.Println("data is deleted")
+		} else {
+			fmt.Println(fmt.Sprintf("name-%d", i) ,"=======>", string(data.value))
+		}
 	}
-	fmt.Println(data)
+
 }
