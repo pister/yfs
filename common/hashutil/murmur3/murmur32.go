@@ -106,14 +106,14 @@ func rotl32(x uint32, r byte) uint32 {
 // Sum32 returns the MurmurHash3 sum of data. It is equivalent to the
 // following sequence (without the extra burden and the extra allocation):
 //     hasher := New32()
-//     hasher.WriteData(data)
+//     hasher.writeData(data)
 //     return hasher.Sum32()
 func Sum32(data []byte) uint32 { return Sum32WithSeed(data, 0) }
 
 // Sum32WithSeed returns the MurmurHash3 sum of data. It is equivalent to the
 // following sequence (without the extra burden and the extra allocation):
 //     hasher := New32WithSeed(seed)
-//     hasher.WriteData(data)
+//     hasher.writeData(data)
 //     return hasher.Sum32()
 func Sum32WithSeed(data []byte, seed uint32) uint32 {
 

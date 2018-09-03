@@ -27,14 +27,11 @@ func TestLsm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = lsm.Put([]byte("name1"), []byte("value11"))
+	err = lsm.Put([]byte("name3"), []byte("value33"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = lsm.Delete([]byte("name3"))
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	var v []byte
 	var found bool
 	v, found = lsm.Get([]byte("name1"))
@@ -55,10 +52,16 @@ func TestLsm(t *testing.T) {
 	} else {
 		fmt.Println("not found")
 	}
+	v, found = lsm.Get([]byte("name31"))
+	if found {
+		fmt.Println(string(v))
+	} else {
+		fmt.Println("not found")
+	}
 
 }
 
-func Test11(t *testing.T) {
+func TestWalOpenAndFlush(t *testing.T) {
 	lsm, err := NewLsm("/Users/songlihuang/temp/temp3/lsm_test")
 	if err != nil {
 		t.Fatal(err)
@@ -83,25 +86,21 @@ func Test11(t *testing.T) {
 	} else {
 		fmt.Println("not found")
 	}
-	err = lsm.Put([]byte("name3"), []byte("value33"))
+	err = lsm.Put([]byte("name31"), []byte("value3111"))
+	err = lsm.Put([]byte("name4"), []byte("value44"))
+	err = lsm.Put([]byte("name2"), []byte("value-222"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, found = lsm.Get([]byte("name3"))
+	v, found = lsm.Get([]byte("name2"))
 	if found {
 		fmt.Println(string(v))
 	} else {
 		fmt.Println("not found")
 	}
-}
-
-func Test22(t *testing.T) {
-	a := make([]int, 0, 5)
-	for i := 0; i < 5; i++ {
-		a = append(a, i)
+	err = lsm.FlushAndClose()
+	if err != nil {
+		t.Fatal(err)
 	}
-	fmt.Println(a)
-	fmt.Println(a[0:2])
-	fmt.Println(a[2:])
-
 }
+

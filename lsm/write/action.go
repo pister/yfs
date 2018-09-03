@@ -58,8 +58,9 @@ func ActionFromReader(reader io.Reader) (*Action, error) {
 	return action, nil
 }
 
-func (action *Action) WriteTo(writer io.Writer) error {
-	buf := make([]byte, 20+len(action.key)+len(action.value))
+func (action *Action) WriteTo(writer io.Writer) (int, error) {
+	writtenLen := 20+len(action.key)+len(action.value)
+	buf := make([]byte, writtenLen)
 	buf[0] = action.version
 	buf[1] = byte(action.op)
 	// buf[2 ... 4) = sumKeyValue 2bytes
@@ -77,5 +78,5 @@ func (action *Action) WriteTo(writer io.Writer) error {
 	sumValue := hashutil.SumHash16(buf[20:])
 	bytesutil.CopyUint16ToBytes(sumValue, buf, 2)
 	_, err := writer.Write(buf)
-	return err
+	return writtenLen, err
 }

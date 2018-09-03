@@ -8,8 +8,9 @@ import (
 )
 
 type ConcurrentReadFile struct {
-	fileChan chan *os.File
-	size     int
+	fileChan       chan *os.File
+	concurrentSize int
+	initFileSize   int64
 }
 
 type PositionWriteFile struct {
@@ -17,10 +18,9 @@ type PositionWriteFile struct {
 	writingPosition int64
 }
 
-
 func OpenAsConcurrentReadFile(path string, concurrentSize int) (*ConcurrentReadFile, error) {
 	cfReader := new(ConcurrentReadFile)
-	cfReader.size = concurrentSize
+	cfReader.concurrentSize = concurrentSize
 	cfReader.fileChan = make(chan *os.File, concurrentSize)
 	tempFiles := make([]*os.File, 0, concurrentSize)
 	var err error = nil
@@ -39,8 +39,19 @@ func OpenAsConcurrentReadFile(path string, concurrentSize int) (*ConcurrentReadF
 		}
 		return nil, err
 	}
-
+	fi, err := tempFiles[0].Stat()
+	if err != nil {
+		for _, fp := range tempFiles {
+			fp.Close()
+		}
+		return nil, err
+	}
+	cfReader.initFileSize = fi.Size()
 	return cfReader, nil
+}
+
+func (cfReader *ConcurrentReadFile) GetInitFileSize() int64 {
+	return cfReader.initFileSize
 }
 
 func (cfReader *ConcurrentReadFile) SeekAndReadData(pos int64, buf []byte) (int, error) {
@@ -73,7 +84,7 @@ func (cfReader *ConcurrentReadFile) SeekForReading(pos int64, callback func(read
 }
 
 func (cfReader *ConcurrentReadFile) Close() error {
-	for i := 0; i < cfReader.size; i++ {
+	for i := 0; i < cfReader.concurrentSize; i++ {
 		fp := <-cfReader.fileChan
 		fp.Close()
 	}
@@ -141,7 +152,7 @@ func (pfWriter *PositionWriteFile) UpdateAt(pos int64, buf []byte) error {
 	defer func() {
 		pfWriter.fileChan <- fp
 	}()
-	if pos + int64(len(buf)) > pfWriter.writingPosition {
+	if pos+int64(len(buf)) > pfWriter.writingPosition {
 		return fmt.Errorf("can not update end of file")
 	}
 	_, err := fp.Seek(pos, 0)
