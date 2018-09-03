@@ -9,7 +9,7 @@ type SafeTreeMap struct {
 	mutex   sync.Mutex
 }
 
-func (m *SafeTreeMap) SafeOperate(callback func(unsafeMap *TreeMap) interface{}) interface{} {
+func (m *SafeTreeMap) SafeOperate(callback func(unsafeMap *TreeMap) (interface{}, error)) (interface{}, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	return callback(m.treeMap)

@@ -4,9 +4,10 @@ import (
 	"io"
 	"github.com/pister/yfs/common/bytesutil"
 	"github.com/pister/yfs/common/hashutil"
+	"fmt"
 )
 
-type actionType uint8
+type actionType byte
 
 const (
 	actionTypePut    actionType = iota
@@ -16,7 +17,7 @@ const (
 const defaultVersion = 1
 
 type Action struct {
-	version     uint8
+	version     byte
 	op          actionType
 	sumKeyValue uint16
 	ts          uint64
@@ -24,8 +25,41 @@ type Action struct {
 	key         []byte
 }
 
+func ActionFromReader(reader io.Reader) (*Action, error) {
+	headerBuf := make([]byte, 20)
+	_, err := reader.Read(headerBuf)
+	if err != nil {
+		return nil, err
+	}
+	action := new(Action)
+	action.version = headerBuf[0]
+	action.op = actionType(headerBuf[1])
+	action.sumKeyValue = bytesutil.GetUint16FromBytes(headerBuf, 2)
+	action.ts = bytesutil.GetUint64FromBytes(headerBuf, 4)
+	keyLen := bytesutil.GetUint32FromBytes(headerBuf, 12)
+	valueLen := bytesutil.GetUint32FromBytes(headerBuf, 16)
+	if keyLen > maxKeyLen {
+		return nil, fmt.Errorf("too big key length: %d", keyLen)
+	}
+	if valueLen > maxValueLen {
+		return nil, fmt.Errorf("too big value length: %d", valueLen)
+	}
+	keyValueDataBuf := make([]byte, keyLen + valueLen)
+	_, err = reader.Read(keyValueDataBuf)
+	if err != nil {
+		return nil, err
+	}
+	sumValue := hashutil.SumHash16(keyValueDataBuf)
+	if sumValue != action.sumKeyValue {
+		return nil, fmt.Errorf("wal sum value not match")
+	}
+	action.key = keyValueDataBuf[0:keyLen]
+	action.value = keyValueDataBuf[keyLen:]
+	return action, nil
+}
+
 func (action *Action) WriteTo(writer io.Writer) error {
-	buf := make([]byte, 20+len(action.key)+len(action.key))
+	buf := make([]byte, 20+len(action.key)+len(action.value))
 	buf[0] = action.version
 	buf[1] = byte(action.op)
 	// buf[2 ... 4) = sumKeyValue 2bytes
@@ -39,8 +73,8 @@ func (action *Action) WriteTo(writer io.Writer) error {
 	// buf[16 ...20) value length in 4bytes
 	bytesutil.CopyUint32ToBytes(uint32(valueLen), buf, 16)
 	bytesutil.CopyDataToBytes(action.key, 0, buf, 20, keyLen)
-	bytesutil.CopyDataToBytes(action.value, 0, buf, 20 + keyLen, valueLen)
-	sumValue := hashutil.SumHash16(buf[20: keyLen + valueLen])
+	bytesutil.CopyDataToBytes(action.value, 0, buf, 20+keyLen, valueLen)
+	sumValue := hashutil.SumHash16(buf[20:])
 	bytesutil.CopyUint16ToBytes(sumValue, buf, 2)
 	_, err := writer.Write(buf)
 	return err

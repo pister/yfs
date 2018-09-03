@@ -4,11 +4,15 @@ import (
 	"os"
 	"github.com/pister/yfs/common/bytesutil"
 	"github.com/pister/yfs/common/hashutil"
+	"fmt"
+	"path/filepath"
 )
 
 type SSTableWriter struct {
-	file     *os.File
-	position uint32
+	file         *os.File
+	position     uint32
+	fileName     string
+	tempFileName string
 }
 
 const (
@@ -45,8 +49,19 @@ key-index-2
 key-index-N
 footer:data-index-start-position,key-index-start-position
  */
-func NewSSTableWriter(path string, name string) (*SSTableWriter, error) {
-	return nil, nil
+func NewSSTableWriter(dir string, ts int64) (*SSTableWriter, error) {
+	ssTableWriter := new(SSTableWriter)
+	fileName := fmt.Sprint("%s%c%s_%d", dir, filepath.Separator, "sst", ts)
+	tempFileName := fileName + "_temp"
+	file, err := os.OpenFile(tempFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		return nil, err
+	}
+	ssTableWriter.fileName = fileName
+	ssTableWriter.tempFileName = tempFileName
+	ssTableWriter.file = file
+	ssTableWriter.position = 0
+	return ssTableWriter, nil
 }
 
 func (writer *SSTableWriter) write(buf []byte) (uint32, error) {
@@ -94,7 +109,7 @@ func (writer *SSTableWriter) writeKeyIndex(keyIndex uint32) (uint32, error) {
 	return writer.write(buf)
 }
 
-func (writer *SSTableWriter) WriteDataIndex(key []byte, deleted byte, dataIndex uint32) (uint32, error) {
+func (writer *SSTableWriter) WriteDataIndex(key []byte, deleted deletedFlag, dataIndex uint32) (uint32, error) {
 	/*
 	2 - bytes magic code
 	1 - byte delete flag
@@ -106,7 +121,7 @@ func (writer *SSTableWriter) WriteDataIndex(key []byte, deleted byte, dataIndex 
 	buf := make([]byte, 12+len(key))
 	buf[0] = keyMagicCode1
 	buf[1] = keyMagicCode2
-	buf[2] = deleted
+	buf[2] = byte(deleted)
 	buf[3] = blockTypeKey
 	bytesutil.CopyUint32ToBytes(dataIndex, buf, 4)
 	bytesutil.CopyUint32ToBytes(uint32(len(key)), buf, 8)
@@ -114,7 +129,7 @@ func (writer *SSTableWriter) WriteDataIndex(key []byte, deleted byte, dataIndex 
 	return writer.write(buf)
 }
 
-func (writer *SSTableWriter) WriteData(key []byte, data *Data) (uint32, error) {
+func (writer *SSTableWriter) WriteData(key []byte, data *blockData) (uint32, error) {
 	/*
 	2 - bytes magic code
 	1 - byte delete flag
@@ -129,7 +144,7 @@ func (writer *SSTableWriter) WriteData(key []byte, data *Data) (uint32, error) {
 	headerAndKey := make([]byte, 24+len(key))
 	headerAndKey[0] = dataMagicCode1
 	headerAndKey[1] = dataMagicCode2
-	headerAndKey[2] = data.deleted
+	headerAndKey[2] = byte(data.deleted)
 	headerAndKey[3] = blockTypeData
 	dataSum := hashutil.SumHash32(data.value)
 	bytesutil.CopyUint32ToBytes(dataSum, headerAndKey, 4)
@@ -149,10 +164,12 @@ func (writer *SSTableWriter) WriteData(key []byte, data *Data) (uint32, error) {
 }
 
 func (writer *SSTableWriter) Close() error {
-	return nil
+	return writer.file.Close()
 }
 
-
 func (writer *SSTableWriter) Commit() error {
+	if err := os.Rename(writer.tempFileName, writer.fileName); err != nil {
+		return err
+	}
 	return nil
 }

@@ -9,21 +9,26 @@ import (
 type Writer struct {
 	lsm          unsafe.Pointer
 	flushOutLock *lockutil.TryLocker
+	dir          string
 }
 
-func (writer *Writer) FlushLsm() {
+func (writer *Writer) FlushLsm() error {
 	if !writer.flushOutLock.TryLock() {
-		return
+		return nil
 	}
 	defer writer.flushOutLock.UnLock()
 
-	newLsm := NewLsm()
+	newLsm, err := NewLsm(writer.dir)
+	if err != nil {
+		return err
+	}
 	oldLsm := (*Lsm)(writer.lsm)
 
 	atomic.StorePointer(&writer.lsm, unsafe.Pointer(newLsm))
 
 	go oldLsm.FlushAndClose()
 
+	return nil
 }
 
 func (writer *Writer) getCurrentLsm() *Lsm {

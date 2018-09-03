@@ -7,6 +7,7 @@ import (
 	"github.com/pister/yfs/common/bloom"
 	"github.com/pister/yfs/common/bytesutil"
 	"github.com/pister/yfs/common/hashutil"
+	"github.com/pister/yfs/common/ioutil"
 )
 
 const (
@@ -48,15 +49,15 @@ func (header *dataHeader) isDeleted() bool {
 // 删除逻辑，只要data和index中其中有一个标记为deleted，就表示已经删除
 type DataBlock struct {
 	blockId   uint32
-	dataFile  *ReadWriteFile
-	indexFile *ReadWriteFile
+	dataFile  *ioutil.PositionWriteFile
+	indexFile *ioutil.PositionWriteFile
 	mutex     sync.Mutex
 	// mapped cache may be very big, we will use bloom-filter instead in future
 	// positionCache map[uint32]uint32 // dataPosition-> dataPosition fileChan's indexPosition
 	positionFilter bloom.Filter
 }
 
-func processForLoadIndex(buf []byte, filter bloom.Filter, dataFile *ReadWriteFile) error {
+func processForLoadIndex(buf []byte, filter bloom.Filter, dataFile *ioutil.PositionWriteFile) error {
 	if buf[0] != dataIndexMagicCode1 || buf[1] != dataIndexMagicCode2 {
 		return fmt.Errorf("magic not match")
 	}
@@ -94,7 +95,7 @@ func processForLoadIndex(buf []byte, filter bloom.Filter, dataFile *ReadWriteFil
 	return nil
 }
 
-func reloadIndexCache(dataFile *ReadWriteFile, indexFile *ReadWriteFile) (bloom.Filter, error) {
+func reloadIndexCache(dataFile *ioutil.ReadWriteFile, indexFile *ioutil.ReadWriteFile) (bloom.Filter, error) {
 	filter := bloom.NewSafeBloomFilter(1024 * 100)
 	// load cache
 	err := indexFile.SeekForReading(0, func(reader io.Reader) error {
@@ -127,11 +128,11 @@ func OpenDataBlock(dataDir string, blockId uint32, concurrentSize int) (*DataBlo
 	dataBlock.blockId = blockId
 	dataPath := fmt.Sprintf("%s/%s_%d", dataDir, dataBlockFileName, blockId)
 	indexPath := fmt.Sprintf("%s/%s_%d", dataDir, dataIndexFileName, blockId)
-	dataFile, err := OpenReadWriteFile(dataPath, concurrentSize)
+	dataFile, err := ioutil.OpenReadWriteFile(dataPath, concurrentSize)
 	if err != nil {
 		return nil, err
 	}
-	indexFile, err := OpenReadWriteFile(indexPath, 1)
+	indexFile, err := ioutil.OpenReadWriteFile(indexPath, 1)
 	if err != nil {
 		dataFile.Close()
 		return nil, err

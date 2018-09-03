@@ -8,13 +8,14 @@ import (
 	"github.com/pister/yfs/common/hashutil"
 	"io"
 	"github.com/pister/yfs/common/maputil"
+	"github.com/pister/yfs/common/ioutil"
 )
 
 type NameBlock struct {
 	blockId   uint32
 	regionId  uint16
 	mutex     sync.Mutex
-	file      *ReadWriteFile
+	file      *ioutil.ReadWriteFile
 	readCache *maputil.SafeMap // map[index]block
 }
 
@@ -27,7 +28,7 @@ const (
 	nameBlockFileName = "name_block"
 )
 
-func initReadCache(nameBlockId uint32, file *ReadWriteFile) (*maputil.SafeMap, error) {
+func initReadCache(nameBlockId uint32, file *ioutil.ReadWriteFile) (*maputil.SafeMap, error) {
 	m := maputil.NewSafeMap()
 	err := file.SeekForReading(0, func(reader io.Reader) error {
 		namePosition := 0
@@ -72,7 +73,7 @@ func OpenNameBlock(regionId uint16, dataDir string, blockId uint32, concurrentSi
 	nameBlock.regionId = regionId
 	nameBlock.blockId = blockId
 	namePath := fmt.Sprintf("%s/%s_%d", dataDir, nameBlockFileName, blockId)
-	nameFile, err := OpenReadWriteFile(namePath, concurrentSize)
+	nameFile, err := ioutil.OpenReadWriteFile(namePath, concurrentSize)
 	if err != nil {
 		return nil, err
 	}
