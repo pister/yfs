@@ -13,8 +13,13 @@ import (
 	"regexp"
 	"io"
 	"github.com/pister/yfs/common/bloom"
-	"sync/atomic"
 	"github.com/pister/yfs/common/listutil"
+	"sort"
+	lg "github.com/pister/yfs/log"
+	"github.com/pister/yfs/common/maputil/switching"
+	"github.com/pister/yfs/common/fileutil"
+	"github.com/pister/yfs/common/lockutil"
+	"github.com/pister/yfs/common/atomicutil"
 )
 
 type deletedFlag byte
@@ -43,24 +48,31 @@ type AheadLog struct {
 	file     *os.File
 	closed   bool
 	filename string
-	dataSize int64
+	dataSize *atomicutil.AtomicInt64
 }
 
 func OpenAheadLog(filename string) (*AheadLog, error) {
-	log := new(AheadLog)
-	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
+	wal := new(AheadLog)
+	if err := wal.openFile(filename); err != nil {
 		return nil, err
 	}
-	log.file = file
-	log.closed = false
-	log.filename = filename
+	return wal, nil
+}
+
+func (wal *AheadLog) openFile(filename string) error {
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		return err
+	}
+	wal.file = file
+	wal.closed = false
+	wal.filename = filename
 	fi, err := file.Stat()
 	if err != nil {
-		return nil, nil
+		return nil
 	}
-	log.dataSize = fi.Size()
-	return log, nil
+	wal.dataSize = atomicutil.NewAtomicInt64(fi.Size())
+	return nil
 }
 
 func (wal *AheadLog) initLsmMemMap(treeMap *maputil.SafeTreeMap) error {
@@ -91,7 +103,7 @@ func (wal *AheadLog) initLsmMemMap(treeMap *maputil.SafeTreeMap) error {
 }
 
 func (wal *AheadLog) GetDataSize() int64 {
-	return atomic.LoadInt64(&wal.dataSize)
+	return wal.dataSize.Get()
 }
 
 func (wal *AheadLog) Append(action *Action) error {
@@ -99,7 +111,7 @@ func (wal *AheadLog) Append(action *Action) error {
 	if err != nil {
 		return err
 	}
-	atomic.AddInt64(&wal.dataSize, int64(wLen))
+	wal.dataSize.Add(int64(wLen))
 	return nil
 }
 
@@ -114,28 +126,18 @@ func (wal *AheadLog) Close() error {
 	return nil
 }
 
-func (wal *AheadLog) RenameToTemp() error {
-	if err := wal.Close(); err != nil {
+func (wal *AheadLog) DeleteFile() error {
+	if err := wal.file.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(wal.filename, wal.filename+"_tmp"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (wal *AheadLog) DeleteTemp() error {
-	if err := wal.Close(); err != nil {
-		return err
-	}
-	if err := os.Remove(wal.filename + "_tmp"); err != nil {
+	if err := fileutil.DeleteFile(wal.filename); err != nil {
 		return err
 	}
 	return nil
 }
 
 const (
-	maxMemData = 20 * 1024 * 1024
+	maxMemData = 10 * 1024 * 1024
 )
 
 type BlockData struct {
@@ -144,14 +146,24 @@ type BlockData struct {
 	value   []byte
 }
 
+var log lg.Logger
+
+func init() {
+	l, err := lg.NewLogger("lsm")
+	if err != nil {
+		panic(err)
+	}
+	log = l
+}
+
 type Lsm struct {
-	aheadLog   *AheadLog
-	memMap     *maputil.SafeTreeMap
-	sstReader  *listutil.CopyOnWriteList // type of *SSTableReader
-	mutex      sync.Mutex
-	flushMutex sync.Mutex
-	dir        string
-	ts         int64
+	aheadLog    *AheadLog
+	memMap      *switching.SwitchingMap
+	sstReaders  *listutil.CopyOnWriteList // type of *SSTableReader
+	mutex       sync.Mutex
+	flushLocker *lockutil.TryLocker
+	dir         string
+	ts          int64
 }
 
 type TsFileName struct {
@@ -159,8 +171,14 @@ type TsFileName struct {
 	ts       int64
 }
 
-func tryOpenExistWal(dir string) (*Lsm, error) {
-	walNamePattern, err := regexp.Compile(`wal_\d+`)
+type walWrapper struct {
+	aheadLog *AheadLog
+	memMap   *maputil.SafeTreeMap
+	ts       int64
+}
+
+func loadExistWal(dir string) (*walWrapper, error) {
+	walNamePattern, err := regexp.Compile(`^wal_\d+$`)
 	if err != nil {
 		return nil, err
 	}
@@ -180,42 +198,110 @@ func tryOpenExistWal(dir string) (*Lsm, error) {
 	if len(walFiles) <= 0 {
 		return nil, nil
 	}
+	ww := new(walWrapper)
 	walFile := walFiles[0]
 	wal, err := OpenAheadLog(walFile.pathName)
 	if err != nil {
 		return nil, err
 	}
-	lsm := new(Lsm)
-	lsm.aheadLog = wal
-	lsm.memMap = maputil.NewSafeTreeMap()
-	if err := wal.initLsmMemMap(lsm.memMap); err != nil {
+	ww.aheadLog = wal
+	ww.memMap = maputil.NewSafeTreeMap()
+	if err := wal.initLsmMemMap(ww.memMap); err != nil {
 		return nil, err
 	}
-	lsm.dir = dir
-	lsm.ts = walFile.ts
-	return lsm, nil
+	ww.ts = walFile.ts
+	return ww, nil
 }
 
-// 检查wal文件，如果有，则加载，否则新建
-func NewLsm(dir string) (*Lsm, error) {
-	lsm, err := tryOpenExistWal(dir)
+type sstFileSlice []TsFileName
+
+func (sf sstFileSlice) Len() int {
+	return len(sf)
+}
+
+func (sf sstFileSlice) Less(i, j int) bool {
+	return sf[i].ts > sf[j].ts
+}
+
+func (sf sstFileSlice) Swap(i, j int) {
+	tmp := sf[i]
+	sf[i] = sf[j]
+	sf[j] = tmp
+}
+
+func loadSSTableReaders(dir string) (*listutil.CopyOnWriteList, error) {
+	sstNamePattern, err := regexp.Compile(`^sst_[abc]_\d+$`)
 	if err != nil {
 		return nil, err
 	}
-	if lsm != nil {
-		return lsm, nil
+	tsFiles := make([]TsFileName, 0, 32)
+	if err := filepath.Walk(dir, func(file string, info os.FileInfo, err error) error {
+		_, name := path.Split(file)
+		if sstNamePattern.MatchString(name) {
+
+			post := strings.LastIndex(name, "_")
+			ts, err := strconv.ParseInt(name[post+1:], 10, 64)
+			if err != nil {
+				return err
+			}
+			tsFiles = append(tsFiles, TsFileName{file, ts})
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
+	sort.Sort(sstFileSlice(tsFiles))
+	sstables := make([]interface{}, 0, len(tsFiles))
+	for _, tsFile := range tsFiles {
+		log.Info("reading sst file: %s", tsFile.pathName)
+
+		sst, err := OpenSSTableReader(tsFile.pathName)
+		if err != nil {
+			return nil, err
+		}
+		sstables = append(sstables, sst)
+	}
+	return listutil.NewCopyOnWriteListWithInitData(sstables), nil
+}
+
+func newWalWrapper(dir string) (*walWrapper, error) {
+	ww := new(walWrapper)
 	ts := time.Now().Unix()
 	walFileName := fmt.Sprintf("%s%c%s_%d", dir, filepath.Separator, "wal", ts)
 	wal, err := OpenAheadLog(walFileName)
 	if err != nil {
 		return nil, err
 	}
-	lsm = new(Lsm)
-	lsm.aheadLog = wal
-	lsm.memMap = maputil.NewSafeTreeMap()
+	ww.memMap = maputil.NewSafeTreeMap()
+	ww.aheadLog = wal
+	ww.ts = ts
+	return ww, nil
+}
+
+// 检查wal文件，如果有，则加载，否则新建
+func OpenLsm(dir string) (*Lsm, error) {
+	ww, err := loadExistWal(dir)
+	if err != nil {
+		return nil, err
+	}
+	if ww == nil {
+		ww, err = newWalWrapper(dir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	lsm := new(Lsm)
+	lsm.aheadLog = ww.aheadLog
+	lsm.memMap = switching.NewSwitchingMapWithInitData(ww.memMap)
 	lsm.dir = dir
-	lsm.ts = ts
+	lsm.ts = ww.ts
+	lsm.flushLocker = lockutil.NewTryLocker()
+	sstReaders, err := loadSSTableReaders(dir)
+	if err != nil {
+		return nil, err
+	}
+	lsm.sstReaders = sstReaders
+
 	return lsm, nil
 }
 
@@ -223,12 +309,19 @@ func (lsm *Lsm) NeedFlush() bool {
 	return lsm.aheadLog.GetDataSize() > maxMemData
 }
 
-
-func (lsm *Lsm) appendBloomFilter(filter bloom.Filter) {
-
+func (lsm *Lsm) Close() error {
+	lsm.flushLocker.Lock()
+	defer lsm.flushLocker.Unlock()
+	lsm.aheadLog.Close()
+	lsm.memMap = nil
+	lsm.sstReaders = nil
+	return nil
 }
 
 func (lsm *Lsm) Put(key []byte, value []byte) error {
+	if value == nil {
+		return fmt.Errorf("value can not be nil")
+	}
 	lsm.mutex.Lock()
 	defer lsm.mutex.Unlock()
 	// write wal
@@ -248,6 +341,12 @@ func (lsm *Lsm) Put(key []byte, value []byte) error {
 	ds.ts = action.ts
 	ds.deleted = normal
 	lsm.memMap.Put(key, ds)
+	if lsm.NeedFlush() {
+		err := lsm.Flush()
+		if err != nil {
+			log.Info("start flush error", err)
+		}
+	}
 	return nil
 }
 
@@ -273,71 +372,47 @@ func (lsm *Lsm) Delete(key []byte) error {
 	return nil
 }
 
-type sstFileSlice []TsFileName
-
-func (sf sstFileSlice) Len() int {
-	return len(sf)
-}
-
-func (sf sstFileSlice) Less(i, j int) bool {
-	return sf[i].ts > sf[j].ts
-}
-
-func (sf sstFileSlice) Swap(i, j int) {
-	tmp := sf[i]
-	sf[i] = sf[j]
-	sf[j] = tmp
-}
-
-func (lsm *Lsm) findBlockDataFromSSTable(key []byte, sst TsFileName) (*BlockData, bool) {
-	// 1. get form cache
-	// 2. search from file
-
-	return nil, false
-}
-
-func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*BlockData, bool) {
-	/*
-	sstFiles := make([]TsFileName, 0, 20)
-	filepath.Walk(lsm.dir, func(file string, info os.FileInfo, err error) error {
-		_, name := path.Split(file)
-		if sstNamePattern.MatchString(name) {
-			post := strings.LastIndex(name, "_")
-			ts, err := strconv.ParseInt(name[post+1:], 10, 64)
-			if err != nil {
-				return err
-			}
-			sstFiles = append(sstFiles, TsFileName{file, ts})
+func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*BlockData, error) {
+	var blockDataFound *BlockData = nil
+	if err := lsm.sstReaders.Foreach(func(item interface{}) (bool, error) {
+		sstReader := item.(*SSTableReader)
+		blockData, err := sstReader.GetByKey(key)
+		if err != nil {
+			return true, err
 		}
-		return nil
-	})
-	sort.Sort(sstFileSlice(sstFiles))
-	for _, sstFile := range sstFiles {
-		fmt.Println(sstFile)
-	}*/
-
-	return nil, false
+		if blockData != nil {
+			blockDataFound = blockData
+			return true, nil
+		}
+		return false, nil
+	}); err != nil {
+		return nil, err
+	}
+	return blockDataFound, nil
 }
 
-func (lsm *Lsm) Get(key []byte) ([]byte, bool) {
+func (lsm *Lsm) Get(key []byte) ([]byte, error) {
 	ds, found := lsm.memMap.Get(key)
 	if found {
 		bd := ds.(*BlockData)
 		if bd.deleted == deleted {
-			return nil, false
+			return nil, nil
 		}
-		return bd.value, true
+		return bd.value, nil
 	}
-	bd, found := lsm.findBlockDataFromSSTables(key)
-	if found {
+	bd, err := lsm.findBlockDataFromSSTables(key)
+	if err != nil {
+		return nil, err
+	}
+	if bd != nil {
 		if bd.deleted == deleted {
-			return nil, false
+			return nil, nil
+		} else {
+			return bd.value, nil
 		}
-		return bd.value, true
 	} else {
-		return nil, false
+		return nil, nil
 	}
-
 }
 
 type dataIndex struct {
@@ -345,32 +420,67 @@ type dataIndex struct {
 	dataIndex uint32
 }
 
-func (lsm *Lsm) FlushAndClose() (string, error) {
-	lsm.flushMutex.Lock()
-	defer lsm.flushMutex.Unlock()
-	sst, err := NewSSTableWriter(lsm.dir, sstLevelA, lsm.ts)
+func flushImpl(dir string, ww *walWrapper) (*SSTableReader, error) {
+	sst, err := NewSSTableWriter(dir, sstLevelA, ww.ts)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
-	if err := sst.WriteMemMap(lsm.memMap); err != nil {
-		return "", err
-	}
-
-	if err := lsm.aheadLog.RenameToTemp(); err != nil {
-		return "", err
+	bloomFilter := bloom.NewUnsafeBloomFilter(bloomBitSizeFromLevel(sstLevelA))
+	if err := sst.WriteMemMap(ww.memMap, func(key []byte) {
+		bloomFilter.Add(key)
+	}); err != nil {
+		return nil, err
 	}
 	if err := sst.Close(); err != nil {
-		return "", err
+		return nil, err
 	}
-	// 4, delete WAL log
-	if err := lsm.aheadLog.DeleteTemp(); err != nil {
-		return "", err
+	// delete WAL log
+	if err := ww.aheadLog.DeleteFile(); err != nil {
+		return nil, err
 	}
-	// 5, rename
+	// rename
 	if err := sst.Commit(); err != nil {
-		return "", err
+		return nil, err
 	}
-	// 6, make bloom-filter as key cache
-	return sst.fileName, nil
+	// open sst reader
+	sstReader, err := OpenSSTableReaderWithBloomFilter(sst.fileName, bloomFilter)
+	if err != nil {
+		return nil, err
+	}
+	return sstReader, nil
+}
+
+func (lsm *Lsm) Flush() error {
+	lsm.flushLocker.Lock()
+
+	ww, err := newWalWrapper(lsm.dir)
+	if err != nil {
+		lsm.flushLocker.Unlock()
+		return err
+	}
+
+	log.Info("start flushing...")
+
+	oldWW := new(walWrapper)
+	oldWW.aheadLog = lsm.aheadLog
+	oldWW.memMap = lsm.memMap.SwitchNew()
+	oldWW.ts = lsm.ts
+
+	lsm.aheadLog = ww.aheadLog
+	lsm.ts = ww.ts
+
+	go func() {
+		defer lsm.flushLocker.Unlock()
+		reader, err := flushImpl(lsm.dir, oldWW)
+		if err != nil {
+			lsm.memMap.MergeToMain()
+			log.Info("flush fail:", err)
+		} else {
+			lsm.sstReaders.Add(reader)
+			lsm.memMap.CleanSwitch()
+			log.Info("flush finish.")
+		}
+
+	}()
+	return nil
 }

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"os"
 	"fmt"
-	"github.com/pister/yfs/common/ioutil"
+	"github.com/pister/yfs/common/fileutil"
 	_ "time"
 	"time"
 )
@@ -44,12 +44,12 @@ func TestTryGetBackupLogFile(t *testing.T) {
 
 func TestTryDeleteOldestFiles(t *testing.T) {
 	path := "/Users/songlihuang/temp/temp2/test-logs"
-	ioutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-30_11_55_20", []byte("hello"))
-	ioutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-14_11_32_12", []byte("hello"))
-	ioutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-14_11_22_12", []byte("hello"))
-	ioutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-30_11_32_11", []byte("hello"))
-	ioutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-11_11_32_11", []byte("hello"))
-	ioutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-30_11_32_13", []byte("hello"))
+	fileutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-30_11_55_20", []byte("hello"))
+	fileutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-14_11_32_12", []byte("hello"))
+	fileutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-14_11_22_12", []byte("hello"))
+	fileutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-30_11_32_11", []byte("hello"))
+	fileutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-11_11_32_11", []byte("hello"))
+	fileutil.WriteDataToFile(path+"/ybfs-log.log_2018-12-30_11_32_13", []byte("hello"))
 	ct := tryDeleteOldestFiles(path, 3)
 	fmt.Println(ct)
 }

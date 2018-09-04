@@ -1,4 +1,4 @@
-package ioutil
+package fileutil
 
 import (
 	"os"
@@ -20,6 +20,18 @@ func PathExists(path string) (bool, error) {
 func WriteDataToFile(path string, data []byte) error {
 	return ioutil.WriteFile(path, data, 0644)
 }
+
+func DeleteFile(path string) error {
+	exist, err := PathExists(path)
+	if err != nil {
+		return err
+	}
+	if !exist {
+		return nil
+	}
+	return os.Remove(path)
+}
+
 
 func MkDirs(dir string) error {
 	fi, err := os.Stat(dir)

@@ -18,7 +18,7 @@ func TestNewTryLocker(t *testing.T) {
 				fmt.Println("not get lock")
 				return
 			}
-			defer locker.UnLock()
+			defer locker.Unlock()
 			count += 1
 			fmt.Println(count)
 

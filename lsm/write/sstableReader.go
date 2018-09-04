@@ -4,7 +4,7 @@ import (
 	"github.com/pister/yfs/common/bytesutil"
 	"fmt"
 	"github.com/pister/yfs/common/bloom"
-	"github.com/pister/yfs/common/ioutil"
+	"github.com/pister/yfs/common/fileutil"
 	"io"
 	"path"
 	"strings"
@@ -13,24 +13,29 @@ import (
 
 type SSTableReader struct {
 	filter bloom.Filter
-	reader *ioutil.ConcurrentReadFile
+	reader *fileutil.ConcurrentReadFile
 }
 
 func OpenSSTableReader(sstFile string) (*SSTableReader, error) {
+	return OpenSSTableReaderWithBloomFilter(sstFile, nil)
+}
+
+func OpenSSTableReaderWithBloomFilter(sstFile string, filter bloom.Filter) (*SSTableReader, error) {
 	_, name := path.Split(sstFile)
 	parts := strings.Split(name, "_")
 	if len(parts) < 3 {
 		return nil, fmt.Errorf("unkonwn sstable files: %s", name)
 	}
 	level := LevelFromName(parts[1])
-	r, err := ioutil.OpenAsConcurrentReadFile(sstFile, concurrentSizeFromLevel(level))
+	r, err := fileutil.OpenAsConcurrentReadFile(sstFile, concurrentSizeFromLevel(level))
 	if err != nil {
 		return nil, err
 	}
-
-	filter, err := readDataIndexAsFilter(r, bloomBitSizeFromLevel(level))
-	if err != nil {
-		return nil, err
+	if filter == nil {
+		filter, err = readDataAsFilter(r, bloomBitSizeFromLevel(level))
+		if err != nil {
+			return nil, err
+		}
 	}
 	reader := new(SSTableReader)
 	reader.filter = filter
@@ -38,7 +43,8 @@ func OpenSSTableReader(sstFile string) (*SSTableReader, error) {
 	return reader, nil
 }
 
-func readDataIndexAsFilter(r *ioutil.ConcurrentReadFile, bloomBitSize uint32) (bloom.Filter, error) {
+
+func readDataAsFilter(r *fileutil.ConcurrentReadFile, bloomBitSize uint32) (bloom.Filter, error) {
 	/*
 	2 - bytes magic code
 	1 - byte delete flag
@@ -95,7 +101,7 @@ func readDataIndexAsFilter(r *ioutil.ConcurrentReadFile, bloomBitSize uint32) (b
 	return filter, nil
 }
 
-func readFooter(r *ioutil.ConcurrentReadFile) (uint32, error) {
+func readFooter(r *fileutil.ConcurrentReadFile) (uint32, error) {
 	/*
 	2 - bytes magic code
 	1 - byte not used

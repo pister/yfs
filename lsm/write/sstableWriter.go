@@ -6,7 +6,6 @@ import (
 	"github.com/pister/yfs/common/hashutil"
 	"fmt"
 	"path/filepath"
-	"github.com/pister/yfs/common/bloom"
 	"github.com/pister/yfs/common/maputil"
 )
 
@@ -120,10 +119,8 @@ func (writer *SSTableWriter) Commit() error {
 	return nil
 }
 
-func (writer *SSTableWriter) WriteMemMap(memMap *maputil.SafeTreeMap) error {
+func (writer *SSTableWriter) WriteMemMap(memMap *maputil.SafeTreeMap, callback func(key []byte)) error {
 	dataLength := memMap.Length()
-	bloomFilter := bloom.NewUnsafeBloomFilter(bloomBitSizeFromLevel(sstLevelA))
-
 	var err error
 	// 1, write data
 	dataIndexes := make([]*dataIndex, 0, dataLength)
@@ -134,7 +131,9 @@ func (writer *SSTableWriter) WriteMemMap(memMap *maputil.SafeTreeMap) error {
 			err = e
 			return true
 		}
-		bloomFilter.Add(key)
+		if callback != nil {
+			callback(key)
+		}
 		dataIndexes = append(dataIndexes, &dataIndex{key, index})
 		return false
 	})

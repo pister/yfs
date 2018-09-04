@@ -1,7 +1,7 @@
 package write
 
 
-// SSTable format
+// SSTable format summary
 /*
 	the sst data format:
 	block-data-0
@@ -17,7 +17,35 @@ package write
 	data-index-N
 
 	footer:data-index-start-position
+
+details:
+
+block-data layout:
+2 - bytes magic code
+1 - byte delete flag
+1 - byte block type
+4 - bytes data sum
+8 - bytes ts
+4 - bytes key length
+4 - bytes data length
+...bytes for key
+...bytes for data
+
+
+data-index layout:
+2 - bytes magic code
+1 - byte not used
+1 - byte block type
+4 - bytes dataIndex
+
+footer layout:
+2 - bytes magic code
+1 - byte not used
+1 - byte block type
+4 - bytes data-index-start-position-Index
+
 */
+
 
 const (
 	dataMagicCode1      = 'D'
@@ -81,12 +109,12 @@ func bloomBitSizeFromLevel(level SSTableLevel) uint32 {
 func concurrentSizeFromLevel(level SSTableLevel) int {
 	switch level {
 	case sstLevelA:
-		return 3
-	case sstLevelB:
 		return 4
+	case sstLevelB:
+		return 6
 	case sstLevelC:
-		return 5
+		return 10
 	default:
-		return 3
+		return 4
 	}
 }

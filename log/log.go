@@ -5,7 +5,7 @@ import (
 	"os"
 	"encoding/json"
 	"io"
-	"github.com/pister/yfs/common/ioutil"
+	"github.com/pister/yfs/common/fileutil"
 	"fmt"
 	"sync"
 	"time"
@@ -210,7 +210,7 @@ func (cf *LoggerConfiguration) ensureLogDirExist() error {
 	if stdoutPath == cf.OutputPath {
 		return nil
 	}
-	exists, err := ioutil.PathExists(cf.OutputPath)
+	exists, err := fileutil.PathExists(cf.OutputPath)
 	if err != nil {
 		return nil
 	}

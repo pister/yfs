@@ -3,7 +3,7 @@ package region
 import (
 	"github.com/pister/yfs/naming"
 	"fmt"
-	"github.com/pister/yfs/common/ioutil"
+	"github.com/pister/yfs/common/fileutil"
 	"path/filepath"
 	"os"
 	"path"
@@ -33,12 +33,12 @@ type Region struct {
 }
 
 func OpenRegion(regionId uint16, path string) (*Region, error) {
-	err := ioutil.MkDirs(path)
+	err := fileutil.MkDirs(path)
 	if err != nil {
 		return nil, err
 	}
 	regionPath := fmt.Sprintf("%s%cregion-%d", path, filepath.Separator, regionId)
-	err = ioutil.MkDirs(regionPath)
+	err = fileutil.MkDirs(regionPath)
 	if err != nil {
 		return nil, err
 	}

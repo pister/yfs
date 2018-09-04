@@ -19,10 +19,9 @@ func (locker *TryLocker) Lock() {
 	locker.locker.c <- true
 }
 
-func (locker *TryLocker) UnLock() {
+func (locker *TryLocker) Unlock() {
 	<-locker.locker.c
 }
-
 
 func (locker *TryLocker) TryLock() bool {
 	select {
@@ -32,4 +31,3 @@ func (locker *TryLocker) TryLock() bool {
 		return false
 	}
 }
-
