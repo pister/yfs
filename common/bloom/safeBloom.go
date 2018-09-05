@@ -28,3 +28,11 @@ func (filter *SafeBloomFilter) Hit(data []byte) bool {
 	}()
 	return filter.targetFilter.Hit(data)
 }
+
+func (filter *SafeBloomFilter) GetBitData() ([]byte, uint32) {
+	filter.op <- 1
+	defer func() {
+		<- filter.op
+	}()
+	return filter.targetFilter.GetBitData()
+}

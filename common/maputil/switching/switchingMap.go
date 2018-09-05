@@ -11,9 +11,9 @@ type SwitchingMap struct {
 	switchingPtr unsafe.Pointer
 }
 
-func NewSwitchingMapWithInitData(initData *maputil.SafeTreeMap) *SwitchingMap {
+func NewSwitchingMapWithMainData(mainData *maputil.SafeTreeMap) *SwitchingMap {
 	m := new(SwitchingMap)
-	atomic.StorePointer(&m.mainPtr, unsafe.Pointer(initData))
+	atomic.StorePointer(&m.mainPtr, unsafe.Pointer(mainData))
 	return m
 }
 

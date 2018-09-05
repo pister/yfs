@@ -18,7 +18,7 @@ func NewCopyOnWriteList() *CopyOnWriteList {
 
 func NewCopyOnWriteListWithInitData(initData []interface{}) *CopyOnWriteList {
 	ret := new(CopyOnWriteList)
-	newList := make([]interface{}, 0, len(initData) + 4)
+	newList := make([]interface{}, len(initData))
 	copy(newList, initData)
 	ret.innerList = unsafe.Pointer(&newList)
 	return ret

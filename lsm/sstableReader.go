@@ -1,4 +1,4 @@
-package write
+package lsm
 
 import (
 	"github.com/pister/yfs/common/bytesutil"
@@ -9,11 +9,13 @@ import (
 	"path"
 	"strings"
 	"github.com/pister/yfs/common/hashutil"
+	"github.com/pister/yfs/common/bitset"
 )
 
 type SSTableReader struct {
-	filter bloom.Filter
-	reader *fileutil.ConcurrentReadFile
+	filter   bloom.Filter
+	reader   *fileutil.ConcurrentReadFile
+	fileSize int64
 }
 
 func OpenSSTableReader(sstFile string) (*SSTableReader, error) {
@@ -31,112 +33,108 @@ func OpenSSTableReaderWithBloomFilter(sstFile string, filter bloom.Filter) (*SST
 	if err != nil {
 		return nil, err
 	}
+	if r.GetInitFileSize() == 0 {
+		r.Close()
+		return nil, nil
+	}
 	if filter == nil {
-		filter, err = readDataAsFilter(r, bloomBitSizeFromLevel(level))
+		filter, err = readBloomFilter(r)
 		if err != nil {
 			return nil, err
 		}
 	}
+	//data, _ := filter.GetBitData()
+	//s := base64util.EncodeBase64ToString(data)
+	//fmt.Println(s)
 	reader := new(SSTableReader)
 	reader.filter = filter
 	reader.reader = r
+	reader.fileSize = r.GetInitFileSize()
 	return reader, nil
 }
 
-
-func readDataAsFilter(r *fileutil.ConcurrentReadFile, bloomBitSize uint32) (bloom.Filter, error) {
+func readBloomFilter(r *fileutil.ConcurrentReadFile) (bloom.Filter, error) {
 	/*
-	2 - bytes magic code
-	1 - byte delete flag
-	1 - byte block type
-	4 - bytes data sum
-	8 - bytes ts
-	4 - bytes key length
-	4 - bytes data length
-	bytes for key
-	bytes for data
+		2 - bytes magic code
+		1 - byte not used
+		1 - byte block type
+		4 - bit set length
+		4 - bloom filter data length
+		...bytes for bloom filter
 	*/
-	filter := bloom.NewUnsafeBloomFilter(bloomBitSize)
-	err := r.SeekForReading(0, func(reader io.Reader) error {
-		for {
-			header := make([]byte, 24)
-			if _, err := reader.Read(header); err != nil {
-				return err
-			}
-			// header[2] // delete flag, not use here
-			if header[3] != blockTypeData {
-				// end
-				return nil
-			}
-			if header[0] != dataMagicCode1 || header[1] != dataMagicCode2 {
-				return fmt.Errorf("data index magic code not match")
-			}
-			// header[4:8] // dataSum not use here
-			// dataSum := bytesutil.GetUint32FromBytes(header, 4)
-			// ts := bytesutil.GetUint64FromBytes(header, 8)
-			keyLength := bytesutil.GetUint32FromBytes(header, 16)
-			valueLength := bytesutil.GetUint32FromBytes(header, 20)
-
-			if keyLength > maxKeyLen {
-				return fmt.Errorf("too big key length")
-			}
-			if valueLength > maxValueLen {
-				return fmt.Errorf("too big value length")
-			}
-			key := make([]byte, keyLength)
-			if _, err := reader.Read(key); err != nil {
-				return err
-			}
-			valueBuf := make([]byte, valueLength)
-			if _, err := reader.Read(valueBuf); err != nil {
-				return err
-			}
-			filter.Add(key)
-		}
-		return nil
-	})
+	_, bloomFilterPosition, err := readFooter(r)
 	if err != nil {
 		return nil, err
 	}
-	return filter, nil
+	var bitSize uint32 = 0
+	var bitBuf []byte
+	if err := r.SeekForReading(int64(bloomFilterPosition), func(reader io.Reader) error {
+		header := make([]byte, 12)
+		if _, err := reader.Read(header); err != nil {
+			return err
+		}
+		if header[0] != bloomFilterMagicCode1 || header[1] != bloomFilterMagicCode2 {
+			return fmt.Errorf("bloom filter magic code not match")
+		}
+		if header[3] != blockTypeBloomFilter {
+			return fmt.Errorf("type not match for bloom filter data")
+		}
+		bitSize = bytesutil.GetUint32FromBytes(header, 4)
+		dataSize := bytesutil.GetUint32FromBytes(header, 8)
+		bitBuf = make([]byte, dataSize)
+		_, err := reader.Read(bitBuf)
+		if err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return bloom.NewUnsafeBloomFilterWithBitSize(bitset.NewBitSetWithInitData(bitSize, bitBuf)), nil
 }
 
-func readFooter(r *fileutil.ConcurrentReadFile) (uint32, error) {
+func readFooter(r *fileutil.ConcurrentReadFile) (uint32, uint32, error) {
 	/*
 	2 - bytes magic code
 	1 - byte not used
 	1 - byte block type
 	4 - bytes data-index-start-position-Index
+	4 - bytes bloom-filter-position
 	*/
 	initFileSize := r.GetInitFileSize()
-	buf := make([]byte, 8)
-	_, err := r.SeekAndReadData(initFileSize-8, buf)
+	buf := make([]byte, 12)
+	_, err := r.SeekAndReadData(initFileSize-12, buf)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	dataIndexStartPosition := bytesutil.GetUint32FromBytes(buf, 4)
+	bloomFilterPosition := bytesutil.GetUint32FromBytes(buf, 8)
 	if buf[0] != footerMagicCode1 || buf[1] != footerMagicCode2 {
-		return 0, fmt.Errorf("footer magic code not match")
+		return 0, 0, fmt.Errorf("footer magic code not match")
 	}
 	if buf[3] != blockTypeFooter {
-		return 0, fmt.Errorf("footer block type not match")
+		return 0, 0, fmt.Errorf("footer block type not match")
 	}
-	return dataIndexStartPosition, nil
+	return dataIndexStartPosition, bloomFilterPosition, nil
+}
+
+func (reader *SSTableReader) Close() error {
+	return reader.reader.Close()
 }
 
 func (reader *SSTableReader) getDataIndexes() ([]uint32, error) {
-	dataIndexStartPosition, err := readFooter(reader.reader)
+	dataIndexStartPosition, _, err := readFooter(reader.reader)
 	if err != nil {
 		return nil, err
 	}
 	dataIndexes := make([]uint32, 0, 256)
 	if err := reader.reader.SeekForReading(int64(dataIndexStartPosition), func(reader io.Reader) error {
 		/*
-			2 - bytes magic code
-			1 - byte not used
-			1 - byte block type
-			4 - bytes dataIndex
-			*/
+		2 - bytes magic code
+		1 - byte not used
+		1 - byte block type
+		4 - bytes dataIndex
+		*/
 		for {
 			buf := make([]byte, 8)
 			_, err := reader.Read(buf)

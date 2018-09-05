@@ -1,5 +1,4 @@
-package write
-
+package lsm
 
 // SSTable format summary
 /*
@@ -15,8 +14,8 @@ package write
 	data-index-2
 	...
 	data-index-N
-
-	footer:data-index-start-position
+	bloom-filter-data 		<- bloom-filter-position
+	footer:data-index-start-position, bloom-filter-position
 
 details:
 
@@ -38,6 +37,14 @@ data-index layout:
 1 - byte block type
 4 - bytes dataIndex
 
+bloom-filter-position layout:
+2 - bytes magic code
+1 - byte not used
+1 - byte block type
+4 - bit set length
+4 - bloom filter data length
+...bytes for bloom filter
+
 footer layout:
 2 - bytes magic code
 1 - byte not used
@@ -46,17 +53,19 @@ footer layout:
 
 */
 
-
 const (
-	dataMagicCode1      = 'D'
-	dataMagicCode2      = 'T'
-	dataIndexMagicCode1 = 'I'
-	dataIndexMagicCode2 = 'X'
-	footerMagicCode1    = 'F'
-	footerMagicCode2    = 'T'
-	blockTypeData       = 1
-	blockTypeDataIndex  = 2
-	blockTypeFooter     = 3
+	dataMagicCode1        = 'D'
+	dataMagicCode2        = 'T'
+	dataIndexMagicCode1   = 'I'
+	dataIndexMagicCode2   = 'X'
+	bloomFilterMagicCode1 = 'B'
+	bloomFilterMagicCode2 = 'F'
+	footerMagicCode1      = 'F'
+	footerMagicCode2      = 'T'
+	blockTypeData         = 1
+	blockTypeDataIndex    = 2
+	blockTypeBloomFilter  = 3
+	blockTypeFooter       = 8
 )
 
 type SSTableLevel int

@@ -19,8 +19,20 @@ func NewBitSet(bitLength uint32) *BitSet {
 	return bs
 }
 
+func NewBitSetWithInitData(bitLength uint32, initData []byte) *BitSet {
+	bs := new(BitSet)
+	bs.length = bitLength
+	bs.bitData = initData
+	return bs
+}
+
+
 func (bs *BitSet) Length() uint32 {
 	return bs.length
+}
+
+func (bs *BitSet) GetRawData() []byte {
+	return bs.bitData
 }
 
 func (bs *BitSet) Set(pos uint32, set bool) {

@@ -8,6 +8,7 @@ import (
 type Filter interface {
 	Add(data []byte)
 	Hit(data []byte) bool
+	GetBitData() ([]byte, uint32)
 }
 
 type hashMaker struct {
@@ -42,12 +43,16 @@ type UnsafeBloomFilter struct {
 }
 
 func NewUnsafeBloomFilter(bitLength uint32) Filter {
+	return NewUnsafeBloomFilterWithBitSize(bitset.NewBitSet(bitLength))
+}
+
+func NewUnsafeBloomFilterWithBitSize(bs *bitset.BitSet) Filter {
 	bf := new(UnsafeBloomFilter)
 	bf.hashMakerChan = make(chan *hashMaker, 4)
 	for i := 0; i < 4; i++ {
 		bf.hashMakerChan <- NewHashMaker()
 	}
-	bf.bits = bitset.NewBitSet(bitLength)
+	bf.bits = bs
 	return bf
 }
 
@@ -68,6 +73,10 @@ func (filter *UnsafeBloomFilter) Hit(data []byte) bool {
 		}
 	}
 	return true
+}
+
+func (filter *UnsafeBloomFilter) GetBitData() ([]byte, uint32) {
+	return filter.bits.GetRawData(), filter.bits.Length()
 }
 
 func (filter *UnsafeBloomFilter) hash(data []byte) []uint32 {
