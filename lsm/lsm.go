@@ -41,7 +41,7 @@ func init() {
 }
 
 const (
-	maxMemData = 10 * 1024 * 1024
+	maxMemData = 20 * 1024 * 1024
 )
 
 type BlockData struct {
@@ -294,7 +294,9 @@ type dataIndex struct {
 }
 
 func (lsm *Lsm) Flush() error {
-	lsm.flushLocker.Lock()
+	if !lsm.flushLocker.TryLock() {
+		return nil
+	}
 
 	ww, err := newWalWrapper(lsm.dir)
 	if err != nil {

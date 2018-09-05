@@ -203,7 +203,7 @@ func TestFlush(t *testing.T) {
 func TestMultiRoutine(t *testing.T) {
 	tempDir := "/Users/songlihuang/temp/temp3/lsm_test"
 	fileutil.MkDirs(tempDir)
-	//defer os.RemoveAll(tempDir)
+	defer os.RemoveAll(tempDir)
 	lsm, err := OpenLsm(tempDir)
 	if err != nil {
 		t.Fatal(err)
@@ -212,51 +212,67 @@ func TestMultiRoutine(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 
-	wg.Add(40)
-	nameChan := make(chan string, 10000)
-	for x := 0; x < 40; x++ {
+	wg.Add(43)
+	for x := 0; x < 10; x++ {
 		go func(x int) {
-			for i := 0; i < 100000; i++ {
+			for i := 0; i < 1000000; i++ {
 				n := rand.Int31n(100000)
 				name := fmt.Sprintf("name-%d-%d", x, n)
 				value := fmt.Sprintf("value-%d-%d", x, n)
 				lsm.Put([]byte(name), []byte(value))
-				nameChan <- name
+				time.Sleep(time.Duration(rand.Int31n(10)) * time.Millisecond)
 			}
-			nameChan <- "<end>"
+			wg.Done()
 		}(x)
 	}
-	counter := atomicutil.NewAtomicUint64(0)
-	for x := 0; x < 100; x++ {
+	hit := atomicutil.NewAtomicUint64(0)
+	notHit := atomicutil.NewAtomicUint64(0)
+	total := atomicutil.NewAtomicUint64(0)
+	for x := 0; x < 3; x++ {
 		go func() {
-			for {
-				name := <-nameChan
-				if name == "<end>" {
-					wg.Done()
-					continue
-				}
+			defer wg.Done()
+			for i := 0; i < 1000000; i++ {
+				total.Increment()
+				y := rand.Int31n(40)
+				n := rand.Int31n(100000)
+				name := fmt.Sprintf("name-%d-%d", y, n)
 				value, err := lsm.Get([]byte(name))
 				if err != nil {
 					t.Fatal(err)
 				}
 				if value == nil {
-					t.Fatal("not found:", name)
+					notHit.Increment()
+				} else {
+					if string(value) ==fmt.Sprintf("value-%d-%d", y, n) {
+						hit.Increment()
+					} else {
+						notHit.Increment()
+						t.Fatal("error for not match!!!!")
+					}
 				}
-				counter.Increment()
-				fmt.Println(name, "===>", string(value))
+				time.Sleep(30 * time.Millisecond)
 			}
+
 		}()
 	}
 
+	go func() {
+		for {
+			time.Sleep(1 * time.Second) // wait for some routine end...
+			a := hit.Get()
+			b := notHit.Get()
+			fmt.Println("=============hit", hit.Get(), "not hit:", notHit.Get(), " total:", total.Get() , "hit rate:", float64(a)/(float64(a) + float64(b)))
+		}
+	}()
+
 	wg.Wait()
-	time.Sleep(1 * time.Second) // wait for some routine end...
-	fmt.Println("=============count", counter.Get())
+
 }
 
 func TestOpenLsm(t *testing.T) {
 	tempDir := "/Users/songlihuang/temp/temp3/lsm_test"
 	fileutil.MkDirs(tempDir)
-//	defer os.RemoveAll(tempDir)
+	//	defer os.RemoveAll(tempDir)
 	lsm1, err := OpenLsm(tempDir)
 	if err != nil {
 		t.Fatal(err)
