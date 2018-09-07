@@ -1,4 +1,4 @@
-package lsm
+package sst
 
 // SSTable format summary
 /*
@@ -62,27 +62,31 @@ const (
 	bloomFilterMagicCode2 = 'F'
 	footerMagicCode1      = 'F'
 	footerMagicCode2      = 'T'
-	blockTypeData         = 1
-	blockTypeDataIndex    = 2
-	blockTypeBloomFilter  = 3
-	blockTypeFooter       = 8
+
+)
+
+const (
+	BlockTypeData         = 1
+	BlockTypeDataIndex    = 2
+	BlockTypeBloomFilter  = 3
+	BlockTypeFooter       = 8
 )
 
 type SSTableLevel int
 
 const (
-	sstLevelA SSTableLevel = iota
-	sstLevelB
-	sstLevelC
+	LevelA SSTableLevel = iota
+	LevelB
+	LevelC
 )
 
 func (level SSTableLevel) Name() string {
 	switch level {
-	case sstLevelA:
+	case LevelA:
 		return "a"
-	case sstLevelB:
+	case LevelB:
 		return "b"
-	case sstLevelC:
+	case LevelC:
 		return "c"
 	default:
 		return "a"
@@ -92,36 +96,36 @@ func (level SSTableLevel) Name() string {
 func LevelFromName(name string) SSTableLevel {
 	switch name {
 	case "a":
-		return sstLevelA
+		return LevelA
 	case "b":
-		return sstLevelB
+		return LevelB
 	case "c":
-		return sstLevelC
+		return LevelC
 	default:
-		return sstLevelA
+		return LevelA
 	}
 }
 
 func bloomBitSizeFromLevel(level SSTableLevel) uint32 {
 	switch level {
-	case sstLevelA:
-		return 20 * 1024
-	case sstLevelB:
-		return 100 * 1024
-	case sstLevelC:
+	case LevelA:
 		return 1024 * 1024
+	case LevelB:
+		return 5 * 1024 * 1024
+	case LevelC:
+		return 10 * 1024 * 1024
 	default:
-		return 20 * 1024
+		return 1024 * 1024
 	}
 }
 
 func concurrentSizeFromLevel(level SSTableLevel) int {
 	switch level {
-	case sstLevelA:
+	case LevelA:
 		return 4
-	case sstLevelB:
+	case LevelB:
 		return 6
-	case sstLevelC:
+	case LevelC:
 		return 10
 	default:
 		return 4

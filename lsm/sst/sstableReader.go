@@ -1,4 +1,4 @@
-package lsm
+package sst
 
 import (
 	"github.com/pister/yfs/common/bytesutil"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"github.com/pister/yfs/common/hashutil"
 	"github.com/pister/yfs/common/bitset"
+	"github.com/pister/yfs/lsm/base"
 )
 
 type SSTableReader struct {
@@ -76,7 +77,7 @@ func readBloomFilter(r *fileutil.ConcurrentReadFile) (bloom.Filter, error) {
 		if header[0] != bloomFilterMagicCode1 || header[1] != bloomFilterMagicCode2 {
 			return fmt.Errorf("bloom filter magic code not match")
 		}
-		if header[3] != blockTypeBloomFilter {
+		if header[3] != BlockTypeBloomFilter {
 			return fmt.Errorf("type not match for bloom filter data")
 		}
 		bitSize = bytesutil.GetUint32FromBytes(header, 4)
@@ -112,7 +113,7 @@ func readFooter(r *fileutil.ConcurrentReadFile) (uint32, uint32, error) {
 	if buf[0] != footerMagicCode1 || buf[1] != footerMagicCode2 {
 		return 0, 0, fmt.Errorf("footer magic code not match")
 	}
-	if buf[3] != blockTypeFooter {
+	if buf[3] != BlockTypeFooter {
 		return 0, 0, fmt.Errorf("footer block type not match")
 	}
 	return dataIndexStartPosition, bloomFilterPosition, nil
@@ -141,7 +142,7 @@ func (reader *SSTableReader) getDataIndexes() ([]uint32, error) {
 			if err != nil {
 				return err
 			}
-			if buf[3] != blockTypeDataIndex {
+			if buf[3] != BlockTypeDataIndex {
 				return nil
 			}
 			if buf[0] != dataIndexMagicCode1 || buf[1] != dataIndexMagicCode2 {
@@ -201,49 +202,69 @@ func KeyCompare(me, other []byte) KeyCompareResult {
 	}
 }
 
-func (reader *SSTableReader) getByDataIndexAndCompareByKey(dataIndex uint32, key []byte) (*BlockData, KeyCompareResult, error) {
-	var blockData = new(BlockData)
+func ReadDataHeader(reader io.Reader) (*base.BlockDataHeader, error) {
+	var blockDataHeader = new(base.BlockDataHeader)
+	header := make([]byte, 24)
+	if _, err := reader.Read(header); err != nil {
+		return nil, err
+	}
+	blockDataHeader.MagicCode1 = header[0]
+	blockDataHeader.MagicCode2 = header[1]
+	blockDataHeader.BlockType = header[3]
+	blockDataHeader.Deleted = base.DeletedFlag(header[2]) // delete flag
+	blockDataHeader.DataSum = bytesutil.GetUint32FromBytes(header, 4)
+	blockDataHeader.Ts = bytesutil.GetUint64FromBytes(header, 8)
+	keyLength := bytesutil.GetUint32FromBytes(header, 16)
+	blockDataHeader.ValueLength = bytesutil.GetUint32FromBytes(header, 20)
+
+	if blockDataHeader.BlockType != BlockTypeData {
+		return nil, nil
+	}
+
+	if keyLength > base.MaxKeyLen {
+		return nil, fmt.Errorf("too big key length")
+	}
+	if blockDataHeader.ValueLength > base.MaxValueLen {
+		return nil, fmt.Errorf("too big value length")
+	}
+	keyBuf := make([]byte, keyLength)
+	if _, err := reader.Read(keyBuf); err != nil {
+		return nil, err
+	}
+	blockDataHeader.Key = keyBuf
+	return blockDataHeader, nil
+}
+
+func (reader *SSTableReader) getByDataIndexAndCompareByKey(dataIndex uint32, key []byte) (*base.BlockData, KeyCompareResult, error) {
+	var blockData = new(base.BlockData)
 	var compareResult KeyCompareResult
 	if err := reader.reader.SeekForReading(int64(dataIndex), func(reader io.Reader) error {
-		header := make([]byte, 24)
-		if _, err := reader.Read(header); err != nil {
+		dataHeader, err := ReadDataHeader(reader)
+		if err != nil {
 			return err
 		}
-		if header[0] != dataMagicCode1 || header[1] != dataMagicCode2 {
+		if dataHeader == nil {
+			return fmt.Errorf("not found data")
+		}
+		if dataHeader.MagicCode1 != dataMagicCode1 || dataHeader.MagicCode2 != dataMagicCode2 {
 			return fmt.Errorf("data index magic code not match")
 		}
-		if header[3] != blockTypeData {
+		if dataHeader.BlockType != BlockTypeData {
 			return fmt.Errorf("block type not match")
 		}
-		blockData.deleted = deletedFlag(header[2]) // delete flag
-		dataSumFromBuf := bytesutil.GetUint32FromBytes(header, 4)
-		blockData.ts = bytesutil.GetUint64FromBytes(header, 8)
-		keyLength := bytesutil.GetUint32FromBytes(header, 16)
-		valueLength := bytesutil.GetUint32FromBytes(header, 20)
-
-		if keyLength > maxKeyLen {
-			return fmt.Errorf("too big key length")
-		}
-		if valueLength > maxValueLen {
-			return fmt.Errorf("too big value length")
-		}
-		keyBuf := make([]byte, keyLength)
-		if _, err := reader.Read(keyBuf); err != nil {
-			return err
-		}
-		compareResult = KeyCompare(key, keyBuf)
+		compareResult = KeyCompare(key, dataHeader.Key)
 		if compareResult != Equals {
 			return nil
 		}
-		valueBuf := make([]byte, valueLength)
+		valueBuf := make([]byte, dataHeader.ValueLength)
 		if _, err := reader.Read(valueBuf); err != nil {
 			return err
 		}
 		dataSumByCal := hashutil.SumHash32(valueBuf)
-		if dataSumByCal != dataSumFromBuf {
+		if dataSumByCal != dataHeader.DataSum {
 			return fmt.Errorf("sum not match")
 		}
-		blockData.value = valueBuf
+		blockData.Value = valueBuf
 		return nil
 	}); err != nil {
 		return nil, compareResult, err
@@ -255,7 +276,7 @@ func (reader *SSTableReader) getByDataIndexAndCompareByKey(dataIndex uint32, key
 	}
 }
 
-func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32) (*BlockData, error) {
+func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32) (*base.BlockData, error) {
 	lowBound := 0
 	upBound := len(dataIndexes)
 	var pos = -1
@@ -292,7 +313,7 @@ func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32) (*Blo
 	}
 }
 
-func (reader *SSTableReader) GetByKey(key []byte) (*BlockData, error) {
+func (reader *SSTableReader) GetByKey(key []byte) (*base.BlockData, error) {
 	if !reader.filter.Hit(key) {
 		return nil, nil
 	}

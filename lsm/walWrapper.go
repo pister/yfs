@@ -12,6 +12,8 @@ import (
 	"time"
 	"regexp"
 	"github.com/pister/yfs/common/bloom"
+	"github.com/pister/yfs/lsm/base"
+	"github.com/pister/yfs/lsm/sst"
 )
 
 var walNamePattern *regexp.Regexp
@@ -30,8 +32,8 @@ type walWrapper struct {
 	ts       int64
 }
 
-func getWalFileNames(dir string) ([]TsFileName, error) {
-	walFiles := make([]TsFileName, 0, 3)
+func getWalFileNames(dir string) ([]base.TsFileName, error) {
+	walFiles := make([]base.TsFileName, 0, 3)
 	filepath.Walk(dir, func(file string, info os.FileInfo, err error) error {
 		_, name := path.Split(file)
 		if walNamePattern.MatchString(name) {
@@ -40,14 +42,14 @@ func getWalFileNames(dir string) ([]TsFileName, error) {
 			if err != nil {
 				return err
 			}
-			walFiles = append(walFiles, TsFileName{file, ts})
+			walFiles = append(walFiles, base.TsFileName{file, ts})
 		}
 		return nil
 	})
 	if len(walFiles) <= 0 {
 		return nil, nil
 	}
-	sort.Sort(sstFileSlice(walFiles))
+	sort.Sort(base.SSTFileSlice(walFiles))
 	return walFiles, nil
 }
 
@@ -81,26 +83,26 @@ func createOrOpenFirstWalWrapper(dir string) (*walWrapper, error) {
 	}
 }
 
-func openWalWrapperByTsFile(walFile TsFileName) (*walWrapper, error) {
+func openWalWrapperByTsFile(walFile base.TsFileName) (*walWrapper, error) {
 	ww := new(walWrapper)
-	wal, err := OpenAheadLog(walFile.pathName)
+	wal, err := OpenAheadLog(walFile.PathName)
 	if err != nil {
 		return nil, err
 	}
 	ww.memMap = maputil.NewSafeTreeMap()
 	wal.initToMemMap(ww.memMap)
 	ww.aheadLog = wal
-	ww.ts = walFile.ts
+	ww.ts = walFile.Ts
 	return ww, nil
 }
 
 func WalFileToSSTable(dir string, ww *walWrapper) (string, bloom.Filter, error) {
-	sst, err := NewSSTableWriter(dir, sstLevelA, ww.ts)
+	writer, err := sst.NewSSTableWriter(dir, sst.LevelA, ww.ts)
 	if err != nil {
 		return "", nil, err
 	}
-	bloomFilter, err := sst.WriteMemMap(ww.memMap)
-	if err := sst.Close(); err != nil {
+	bloomFilter, err := writer.WriteMemMap(ww.memMap)
+	if err := writer.Close(); err != nil {
 		return "", nil, err
 	}
 	// delete WAL log
@@ -108,8 +110,8 @@ func WalFileToSSTable(dir string, ww *walWrapper) (string, bloom.Filter, error) 
 		return "", nil, err
 	}
 	// rename
-	if err := sst.Commit(); err != nil {
+	if err := writer.Commit(); err != nil {
 		return "", nil, err
 	}
-	return sst.fileName, bloomFilter, nil
+	return writer.GetFileName(), bloomFilter, nil
 }

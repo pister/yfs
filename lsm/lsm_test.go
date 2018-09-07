@@ -203,7 +203,7 @@ func TestFlush(t *testing.T) {
 func TestMultiRoutine(t *testing.T) {
 	tempDir := "/Users/songlihuang/temp/temp3/lsm_test"
 	fileutil.MkDirs(tempDir)
-	defer os.RemoveAll(tempDir)
+	//	defer os.RemoveAll(tempDir)
 	lsm, err := OpenLsm(tempDir)
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestMultiRoutine(t *testing.T) {
 				if value == nil {
 					notHit.Increment()
 				} else {
-					if string(value) ==fmt.Sprintf("value-%d-%d", y, n) {
+					if string(value) == fmt.Sprintf("value-%d-%d", y, n) {
 						hit.Increment()
 					} else {
 						notHit.Increment()
@@ -261,7 +261,65 @@ func TestMultiRoutine(t *testing.T) {
 			time.Sleep(1 * time.Second) // wait for some routine end...
 			a := hit.Get()
 			b := notHit.Get()
-			fmt.Println("=============hit", hit.Get(), "not hit:", notHit.Get(), " total:", total.Get() , "hit rate:", float64(a)/(float64(a) + float64(b)))
+			fmt.Println("=============hit", hit.Get(), "not hit:", notHit.Get(), " total:", total.Get(), "hit rate:", float64(a)/(float64(a)+float64(b)))
+		}
+	}()
+
+	wg.Wait()
+
+}
+
+func TestMultiRoutineRead(t *testing.T) {
+	tempDir := "/Users/songlihuang/temp/temp3/lsm_test"
+	fileutil.MkDirs(tempDir)
+	//defer os.RemoveAll(tempDir)
+	lsm, err := OpenLsm(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lsm.Close()
+
+	wg := sync.WaitGroup{}
+
+	wg.Add(3)
+	hit := atomicutil.NewAtomicUint64(0)
+	notHit := atomicutil.NewAtomicUint64(0)
+	total := atomicutil.NewAtomicUint64(0)
+	for x := 0; x < 2; x++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 1000000; i++ {
+				total.Increment()
+				y := rand.Int31n(40)
+				n := rand.Int31n(100000)
+				name := fmt.Sprintf("name-%d-%d", y, n)
+				t1 := time.Now().Unix()
+				value, err := lsm.Get([]byte(name))
+				t2 := time.Now().Unix()
+				fmt.Println(t2 - t1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if value == nil {
+					notHit.Increment()
+				} else {
+					if string(value) == fmt.Sprintf("value-%d-%d", y, n) {
+						hit.Increment()
+					} else {
+						notHit.Increment()
+						t.Fatal("error for not match!!!!")
+					}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		for {
+			time.Sleep(1 * time.Second) // wait for some routine end...
+			a := hit.Get()
+			b := notHit.Get()
+			fmt.Println("=============hit", hit.Get(), "not hit:", notHit.Get(), " total:", total.Get(), "hit rate:", float64(a)/(float64(a)+float64(b)))
 		}
 	}()
 
@@ -277,37 +335,40 @@ func TestOpenLsm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = lsm1.Put([]byte("name-1"), []byte("data-1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = lsm1.Flush()
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := lsm1.Get([]byte("name-1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if data == nil {
-		t.Fatal("not found")
-	} else {
-		fmt.Println(string(data))
-	}
-	lsm1.Close()
+	defer lsm1.Close()
 
-	lsm2, err := OpenLsm(tempDir)
+	t1 := time.Now().UnixNano() / 1000000
+	value, err := lsm1.Get([]byte("name-3-60619"))
+	t2 := time.Now().UnixNano() / 1000000
+	fmt.Println(t2 - t1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err = lsm2.Get([]byte("name-1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if data == nil {
+	if value == nil {
 		t.Fatal("not found")
 	} else {
-		fmt.Println(string(data))
+		fmt.Println(string(value))
 	}
-	lsm2.Close()
+}
+
+
+func TestSSTableReader_GetByKey(t *testing.T) {
+	tempDir := "/Users/songlihuang/temp/temp3/sstable_test"
+	fileutil.MkDirs(tempDir)
+	defer os.RemoveAll(tempDir)
+	lsm, err := OpenLsm(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		lsm.Put([]byte(fmt.Sprintf("name-%d", i)), []byte(fmt.Sprintf("value-%d", i)))
+	}
+
+	lsm.Delete([]byte("name-0"))
+
+	err = lsm.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 }

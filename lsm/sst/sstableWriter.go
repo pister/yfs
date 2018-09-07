@@ -1,4 +1,4 @@
-package lsm
+package sst
 
 import (
 	"os"
@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"github.com/pister/yfs/common/maputil"
 	"github.com/pister/yfs/common/bloom"
+	"github.com/pister/yfs/lsm/base"
 )
 
 type SSTableWriter struct {
@@ -15,6 +16,10 @@ type SSTableWriter struct {
 	position     uint32
 	fileName     string
 	tempFileName string
+}
+
+func (writer *SSTableWriter) GetFileName() string {
+	return writer.fileName
 }
 
 func NewSSTableWriter(dir string, level SSTableLevel, ts int64) (*SSTableWriter, error) {
@@ -54,7 +59,7 @@ func (writer *SSTableWriter) writeFooter(dataIndexStartPosition uint32, bloomFil
 	buf[0] = footerMagicCode1
 	buf[1] = footerMagicCode2
 	buf[2] = 0
-	buf[3] = blockTypeFooter
+	buf[3] = BlockTypeFooter
 	bytesutil.CopyUint32ToBytes(dataIndexStartPosition, buf, 4)
 	bytesutil.CopyUint32ToBytes(bloomFilterPosition, buf, 8)
 	_, err := writer.write(buf)
@@ -72,7 +77,7 @@ func (writer *SSTableWriter) writeDataIndex(key []byte, dataIndex uint32) (uint3
 	buf[0] = dataIndexMagicCode1
 	buf[1] = dataIndexMagicCode2
 	buf[2] = 0
-	buf[3] = blockTypeDataIndex
+	buf[3] = BlockTypeDataIndex
 	bytesutil.CopyUint32ToBytes(dataIndex, buf, 4)
 	return writer.write(buf)
 }
@@ -90,7 +95,7 @@ func (writer *SSTableWriter) writeBloomFilterData(data []byte, bitLength uint32)
 	buf[0] = bloomFilterMagicCode1
 	buf[1] = bloomFilterMagicCode2
 	buf[2] = 0
-	buf[3] = blockTypeBloomFilter
+	buf[3] = BlockTypeBloomFilter
 	bytesutil.CopyUint32ToBytes(bitLength, buf, 4)
 	bytesutil.CopyUint32ToBytes(uint32(len(data)), buf, 8)
 	pos, err := writer.write(buf)
@@ -103,7 +108,7 @@ func (writer *SSTableWriter) writeBloomFilterData(data []byte, bitLength uint32)
 	return pos, nil
 }
 
-func (writer *SSTableWriter) writeData(key []byte, data *BlockData) (uint32, error) {
+func (writer *SSTableWriter) writeData(key []byte, data *base.BlockData) (uint32, error) {
 	/*
 	2 - bytes magic code
 	1 - byte delete flag
@@ -118,19 +123,19 @@ func (writer *SSTableWriter) writeData(key []byte, data *BlockData) (uint32, err
 	headerAndKey := make([]byte, 24+len(key))
 	headerAndKey[0] = dataMagicCode1
 	headerAndKey[1] = dataMagicCode2
-	headerAndKey[2] = byte(data.deleted)
-	headerAndKey[3] = blockTypeData
-	dataSum := hashutil.SumHash32(data.value)
+	headerAndKey[2] = byte(data.Deleted)
+	headerAndKey[3] = BlockTypeData
+	dataSum := hashutil.SumHash32(data.Value)
 	bytesutil.CopyUint32ToBytes(dataSum, headerAndKey, 4)
-	bytesutil.CopyUint64ToBytes(data.ts, headerAndKey, 8)
+	bytesutil.CopyUint64ToBytes(data.Ts, headerAndKey, 8)
 	bytesutil.CopyUint32ToBytes(uint32(len(key)), headerAndKey, 16)
-	bytesutil.CopyUint32ToBytes(uint32(len(data.value)), headerAndKey, 20)
+	bytesutil.CopyUint32ToBytes(uint32(len(data.Value)), headerAndKey, 20)
 	bytesutil.CopyDataToBytes(key, 0, headerAndKey, 24, len(key))
 	dataIndex, err := writer.write(headerAndKey)
 	if err != nil {
 		return 0, nil
 	}
-	_, err = writer.write(data.value)
+	_, err = writer.write(data.Value)
 	if err != nil {
 		return 0, nil
 	}
@@ -149,23 +154,23 @@ func (writer *SSTableWriter) Commit() error {
 }
 
 func (writer *SSTableWriter) WriteMemMap(memMap *maputil.SafeTreeMap) (bloom.Filter, error) {
-	bloomFilter := bloom.NewUnsafeBloomFilter(bloomBitSizeFromLevel(sstLevelA))
+	bloomFilter := bloom.NewUnsafeBloomFilter(bloomBitSizeFromLevel(LevelA))
 	dataLength := memMap.Length()
 	if dataLength == 0 {
 		return nil, nil
 	}
 	var err error
 	// 1, write data
-	dataIndexes := make([]*dataIndex, 0, dataLength)
+	dataIndexes := make([]*base.DataIndex, 0, dataLength)
 	memMap.Foreach(func(key []byte, value interface{}) bool {
-		data := value.(*BlockData)
+		data := value.(*base.BlockData)
 		index, e := writer.writeData(key, data)
 		if e != nil {
 			err = e
 			return true
 		}
 		bloomFilter.Add(key)
-		dataIndexes = append(dataIndexes, &dataIndex{key, index})
+		dataIndexes = append(dataIndexes, &base.DataIndex{key, index})
 		return false
 	})
 	if err != nil {
@@ -175,7 +180,7 @@ func (writer *SSTableWriter) WriteMemMap(memMap *maputil.SafeTreeMap) (bloom.Fil
 	// 2, write data index
 	keyIndexes := make([]uint32, 0, dataLength)
 	for _, di := range dataIndexes {
-		keyIndex, err := writer.writeDataIndex(di.key, di.dataIndex)
+		keyIndex, err := writer.writeDataIndex(di.Key, di.DataIndex)
 		if err != nil {
 			return nil, err
 		}

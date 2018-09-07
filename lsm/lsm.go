@@ -16,39 +16,9 @@ import (
 	"github.com/pister/yfs/common/maputil/switching"
 	"github.com/pister/yfs/common/lockutil"
 	"github.com/pister/yfs/common/fileutil"
+	"github.com/pister/yfs/lsm/sst"
+	"github.com/pister/yfs/lsm/base"
 )
-
-type deletedFlag byte
-
-const (
-	normal  deletedFlag = 0
-	deleted             = 1
-)
-
-const (
-	maxKeyLen   = 2 * 1024
-	maxValueLen = 20 * 1024 * 1024
-)
-
-var sstNamePattern *regexp.Regexp
-
-func init() {
-	p, err := regexp.Compile(`sst_[abc]_\d+`)
-	if err != nil {
-		panic(err)
-	}
-	sstNamePattern = p
-}
-
-const (
-	maxMemData = 20 * 1024 * 1024
-)
-
-type BlockData struct {
-	deleted deletedFlag
-	ts      uint64
-	value   []byte
-}
 
 var log lg.Logger
 
@@ -70,33 +40,12 @@ type Lsm struct {
 	ts          int64
 }
 
-type TsFileName struct {
-	pathName string
-	ts       int64
-}
-
-type sstFileSlice []TsFileName
-
-func (sf sstFileSlice) Len() int {
-	return len(sf)
-}
-
-func (sf sstFileSlice) Less(i, j int) bool {
-	return sf[i].ts > sf[j].ts
-}
-
-func (sf sstFileSlice) Swap(i, j int) {
-	tmp := sf[i]
-	sf[i] = sf[j]
-	sf[j] = tmp
-}
-
 func loadSSTableReaders(dir string) (*listutil.CopyOnWriteList, error) {
 	sstNamePattern, err := regexp.Compile(`^sst_[abc]_\d+$`)
 	if err != nil {
 		return nil, err
 	}
-	tsFiles := make([]TsFileName, 0, 32)
+	tsFiles := make([]base.TsFileName, 0, 32)
 	if err := filepath.Walk(dir, func(file string, info os.FileInfo, err error) error {
 		_, name := path.Split(file)
 		if sstNamePattern.MatchString(name) {
@@ -105,23 +54,23 @@ func loadSSTableReaders(dir string) (*listutil.CopyOnWriteList, error) {
 			if err != nil {
 				return err
 			}
-			tsFiles = append(tsFiles, TsFileName{file, ts})
+			tsFiles = append(tsFiles, base.TsFileName{file, ts})
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	sort.Sort(sstFileSlice(tsFiles))
+	sort.Sort(base.SSTFileSlice(tsFiles))
 	sstables := make([]interface{}, 0, len(tsFiles))
 	for _, tsFile := range tsFiles {
-		log.Info("reading sst file: %s", tsFile.pathName)
+		log.Info("reading sst file: %s", tsFile.PathName)
 
-		sst, err := OpenSSTableReader(tsFile.pathName)
+		sst, err := sst.OpenSSTableReader(tsFile.PathName)
 		if err != nil {
 			return nil, err
 		}
 		if sst == nil {
-			log.Info("ignore empty sst file: %s", tsFile.pathName)
+			log.Info("ignore empty sst file: %s", tsFile.PathName)
 			continue
 		}
 		sstables = append(sstables, sst)
@@ -143,15 +92,15 @@ func prepareForOpenLsm(dir string) error {
 			return err
 		}
 		if ww.aheadLog.dataSize.Get() == 0 {
-			fileutil.DeleteFile(tsFile.pathName)
-			log.Info("wal %s size is 0. just delete it", tsFile.pathName)
+			fileutil.DeleteFile(tsFile.PathName)
+			log.Info("wal %s size is 0. just delete it", tsFile.PathName)
 			continue
 		}
 		_, _, err = WalFileToSSTable(dir, ww)
 		if err != nil {
 			return err
 		}
-		log.Info("processed wal to sst: %s", tsFile.pathName)
+		log.Info("processed wal to sst: %s", tsFile.PathName)
 	}
 	return nil
 }
@@ -179,7 +128,7 @@ func OpenLsm(dir string) (*Lsm, error) {
 }
 
 func (lsm *Lsm) NeedFlush() bool {
-	return lsm.aheadLog.GetDataSize() > maxMemData
+	return lsm.aheadLog.GetDataSize() > base.MaxMemData
 }
 
 func (lsm *Lsm) Close() error {
@@ -209,10 +158,10 @@ func (lsm *Lsm) Put(key []byte, value []byte) error {
 		return err
 	}
 	// update mem
-	ds := new(BlockData)
-	ds.value = value
-	ds.ts = action.ts
-	ds.deleted = normal
+	ds := new(base.BlockData)
+	ds.Value = value
+	ds.Ts = action.ts
+	ds.Deleted = base.Normal
 	lsm.memMap.Put(key, ds)
 	if lsm.NeedFlush() {
 		err := lsm.Flush()
@@ -237,18 +186,18 @@ func (lsm *Lsm) Delete(key []byte) error {
 		return err
 	}
 	// update mem
-	ds := new(BlockData)
-	ds.value = nil
-	ds.ts = action.ts
-	ds.deleted = deleted
+	ds := new(base.BlockData)
+	ds.Value = nil
+	ds.Ts = action.ts
+	ds.Deleted = base.Deleted
 	lsm.memMap.Put(key, ds)
 	return nil
 }
 
-func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*BlockData, error) {
-	var blockDataFound *BlockData = nil
+func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*base.BlockData, error) {
+	var blockDataFound *base.BlockData = nil
 	if err := lsm.sstReaders.Foreach(func(item interface{}) (bool, error) {
-		sstReader := item.(*SSTableReader)
+		sstReader := item.(*sst.SSTableReader)
 		blockData, err := sstReader.GetByKey(key)
 		if err != nil {
 			return true, err
@@ -267,30 +216,25 @@ func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*BlockData, error) {
 func (lsm *Lsm) Get(key []byte) ([]byte, error) {
 	ds, found := lsm.memMap.Get(key)
 	if found {
-		bd := ds.(*BlockData)
-		if bd.deleted == deleted {
+		bd := ds.(*base.BlockData)
+		if bd.Deleted == base.Deleted {
 			return nil, nil
 		}
-		return bd.value, nil
+		return bd.Value, nil
 	}
 	bd, err := lsm.findBlockDataFromSSTables(key)
 	if err != nil {
 		return nil, err
 	}
 	if bd != nil {
-		if bd.deleted == deleted {
+		if bd.Deleted == base.Deleted {
 			return nil, nil
 		} else {
-			return bd.value, nil
+			return bd.Value, nil
 		}
 	} else {
 		return nil, nil
 	}
-}
-
-type dataIndex struct {
-	key       []byte
-	dataIndex uint32
 }
 
 func (lsm *Lsm) Flush() error {
@@ -321,7 +265,7 @@ func (lsm *Lsm) Flush() error {
 			lsm.memMap.MergeToMain()
 			log.Info("flush fail:", err)
 		} else {
-			reader, err := OpenSSTableReaderWithBloomFilter(sstFilePath, filter)
+			reader, err := sst.OpenSSTableReaderWithBloomFilter(sstFilePath, filter)
 			if err != nil {
 				lsm.memMap.MergeToMain()
 				log.Info("open sst %s error:", sstFilePath)
@@ -332,5 +276,10 @@ func (lsm *Lsm) Flush() error {
 			}
 		}
 	}()
+	return nil
+}
+
+func (lsm *Lsm) Compact() error {
+
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"github.com/pister/yfs/common/bytesutil"
 	"github.com/pister/yfs/common/hashutil"
 	"fmt"
+	"github.com/pister/yfs/lsm/base"
 )
 
 type actionType byte
@@ -38,10 +39,10 @@ func ActionFromReader(reader io.Reader) (*Action, error) {
 	action.ts = bytesutil.GetUint64FromBytes(headerBuf, 4)
 	keyLen := bytesutil.GetUint32FromBytes(headerBuf, 12)
 	valueLen := bytesutil.GetUint32FromBytes(headerBuf, 16)
-	if keyLen > maxKeyLen {
+	if keyLen > base.MaxKeyLen {
 		return nil, fmt.Errorf("too big key length: %d", keyLen)
 	}
-	if valueLen > maxValueLen {
+	if valueLen > base.MaxValueLen {
 		return nil, fmt.Errorf("too big value length: %d", valueLen)
 	}
 	keyValueDataBuf := make([]byte, keyLen + valueLen)

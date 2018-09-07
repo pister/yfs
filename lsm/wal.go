@@ -6,6 +6,7 @@ import (
 	"github.com/pister/yfs/common/maputil"
 	"github.com/pister/yfs/common/fileutil"
 	"io"
+	"github.com/pister/yfs/lsm/base"
 )
 
 type AheadLog struct {
@@ -50,14 +51,14 @@ func (wal *AheadLog) initToMemMap(treeMap *maputil.SafeTreeMap) error {
 					break
 				}
 			}
-			ds := new(BlockData)
-			ds.value = action.value
-			ds.ts = action.ts
+			ds := new(base.BlockData)
+			ds.Value = action.value
+			ds.Ts = action.ts
 			switch action.op {
 			case actionTypePut:
-				ds.deleted = normal
+				ds.Deleted = base.Normal
 			case actionTypeDelete:
-				ds.deleted = deleted
+				ds.Deleted = base.Deleted
 			}
 			unsafeMap.Put(action.key, ds)
 		}
