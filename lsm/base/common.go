@@ -1,6 +1,9 @@
 package base
 
-import "regexp"
+import (
+	"regexp"
+	"time"
+)
 
 type TsFileName struct {
 	PathName string
@@ -23,14 +26,14 @@ func (sf SSTFileSlice) Swap(i, j int) {
 	sf[j] = tmp
 }
 
-var sstNamePattern *regexp.Regexp
+var SSTNamePattern *regexp.Regexp
 
 func init() {
 	p, err := regexp.Compile(`sst_[abc]_\d+`)
 	if err != nil {
 		panic(err)
 	}
-	sstNamePattern = p
+	SSTNamePattern = p
 }
 
 type DeletedFlag byte
@@ -69,4 +72,8 @@ type BlockDataHeader struct {
 type DataIndex struct {
 	Key       []byte
 	DataIndex uint32
+}
+
+func GetCurrentTs() int64 {
+	return time.Now().UnixNano()
 }

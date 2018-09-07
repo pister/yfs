@@ -9,7 +9,6 @@ import (
 	"os"
 	"sort"
 	"fmt"
-	"time"
 	"regexp"
 	"github.com/pister/yfs/common/bloom"
 	"github.com/pister/yfs/lsm/base"
@@ -55,7 +54,7 @@ func getWalFileNames(dir string) ([]base.TsFileName, error) {
 
 func newWalWrapper(dir string) (*walWrapper, error) {
 	ww := new(walWrapper)
-	ts := time.Now().Unix()
+	ts := base.GetCurrentTs()
 	walFileName := fmt.Sprintf("%s%c%s_%d", dir, filepath.Separator, "wal", ts)
 	wal, err := OpenAheadLog(walFileName)
 	if err != nil {
@@ -101,7 +100,11 @@ func WalFileToSSTable(dir string, ww *walWrapper) (string, bloom.Filter, error) 
 	if err != nil {
 		return "", nil, err
 	}
-	bloomFilter, err := writer.WriteMemMap(ww.memMap)
+	dataLength := ww.memMap.Length()
+	if dataLength == 0 {
+		return "", nil, nil
+	}
+	bloomFilter, err := writer.WriteFullData(ww.memMap)
 	if err := writer.Close(); err != nil {
 		return "", nil, err
 	}

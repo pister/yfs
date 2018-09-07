@@ -58,10 +58,11 @@ func (m *SafeTreeMap) Max() (key []byte, value interface{}) {
 
 }
 
-func (m *SafeTreeMap) Foreach(callback func(key []byte, value interface{}) bool ) {
+func (m *SafeTreeMap) Foreach(callback func(key []byte, value interface{}) bool ) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	m.treeMap.Foreach(callback)
+	return nil
 }
 
 func NewSafeTreeMap() *SafeTreeMap {

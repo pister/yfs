@@ -6,7 +6,6 @@ import (
 	"github.com/pister/yfs/common/hashutil"
 	"fmt"
 	"path/filepath"
-	"github.com/pister/yfs/common/maputil"
 	"github.com/pister/yfs/common/bloom"
 	"github.com/pister/yfs/lsm/base"
 )
@@ -47,7 +46,7 @@ func (writer *SSTableWriter) write(buf []byte) (uint32, error) {
 	return position, nil
 }
 
-func (writer *SSTableWriter) writeFooter(dataIndexStartPosition uint32, bloomFilterPosition uint32) error {
+func (writer *SSTableWriter) WriteFooter(dataIndexStartPosition uint32, bloomFilterPosition uint32) error {
 	/*
 	2 - bytes magic code
 	1 - byte not used
@@ -66,7 +65,7 @@ func (writer *SSTableWriter) writeFooter(dataIndexStartPosition uint32, bloomFil
 	return err
 }
 
-func (writer *SSTableWriter) writeDataIndex(key []byte, dataIndex uint32) (uint32, error) {
+func (writer *SSTableWriter) WriteDataIndex(key []byte, dataIndex uint32) (uint32, error) {
 	/*
 	2 - bytes magic code
 	1 - byte not used
@@ -82,7 +81,7 @@ func (writer *SSTableWriter) writeDataIndex(key []byte, dataIndex uint32) (uint3
 	return writer.write(buf)
 }
 
-func (writer *SSTableWriter) writeBloomFilterData(data []byte, bitLength uint32) (uint32, error) {
+func (writer *SSTableWriter) WriteBloomFilterData(data []byte, bitLength uint32) (uint32, error) {
 	/*
 	2 - bytes magic code
 	1 - byte not used
@@ -108,7 +107,7 @@ func (writer *SSTableWriter) writeBloomFilterData(data []byte, bitLength uint32)
 	return pos, nil
 }
 
-func (writer *SSTableWriter) writeData(key []byte, data *base.BlockData) (uint32, error) {
+func (writer *SSTableWriter) WriteDataBlock(key []byte, data *base.BlockData) (uint32, error) {
 	/*
 	2 - bytes magic code
 	1 - byte delete flag
@@ -153,24 +152,24 @@ func (writer *SSTableWriter) Commit() error {
 	return nil
 }
 
-func (writer *SSTableWriter) WriteMemMap(memMap *maputil.SafeTreeMap) (bloom.Filter, error) {
+type ForeachAble interface {
+	Foreach(callback func(key []byte, value /*base.BlockData*/ interface{}) bool) error
+}
+
+func (writer *SSTableWriter) WriteFullData(memMap ForeachAble) (bloom.Filter, error) {
 	bloomFilter := bloom.NewUnsafeBloomFilter(bloomBitSizeFromLevel(LevelA))
-	dataLength := memMap.Length()
-	if dataLength == 0 {
-		return nil, nil
-	}
 	var err error
 	// 1, write data
-	dataIndexes := make([]*base.DataIndex, 0, dataLength)
+	dataIndexes := make([]*base.DataIndex, 0, 64)
 	memMap.Foreach(func(key []byte, value interface{}) bool {
 		data := value.(*base.BlockData)
-		index, e := writer.writeData(key, data)
+		index, e := writer.WriteDataBlock(key, data)
 		if e != nil {
 			err = e
 			return true
 		}
 		bloomFilter.Add(key)
-		dataIndexes = append(dataIndexes, &base.DataIndex{key, index})
+		dataIndexes = append(dataIndexes, &base.DataIndex{Key: key, DataIndex: index})
 		return false
 	})
 	if err != nil {
@@ -178,9 +177,9 @@ func (writer *SSTableWriter) WriteMemMap(memMap *maputil.SafeTreeMap) (bloom.Fil
 	}
 
 	// 2, write data index
-	keyIndexes := make([]uint32, 0, dataLength)
+	keyIndexes := make([]uint32, 0, 64)
 	for _, di := range dataIndexes {
-		keyIndex, err := writer.writeDataIndex(di.Key, di.DataIndex)
+		keyIndex, err := writer.WriteDataIndex(di.Key, di.DataIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -190,13 +189,13 @@ func (writer *SSTableWriter) WriteMemMap(memMap *maputil.SafeTreeMap) (bloom.Fil
 
 	// 3 write bloom filter
 	bloomData, bitLength := bloomFilter.GetBitData()
-	bloomFilterPosition, err := writer.writeBloomFilterData(bloomData, bitLength)
+	bloomFilterPosition, err := writer.WriteBloomFilterData(bloomData, bitLength)
 	if err != nil {
 		return nil, err
 	}
 
 	// 4,  writer footer
-	if err := writer.writeFooter(dataIndexStartPosition, bloomFilterPosition); err != nil {
+	if err := writer.WriteFooter(dataIndexStartPosition, bloomFilterPosition); err != nil {
 		return nil, err
 	}
 	return bloomFilter, nil

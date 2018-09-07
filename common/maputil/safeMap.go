@@ -141,11 +141,12 @@ func iteratorShard(mutex *sync.Mutex, shard map[interface{}]interface{}, callbac
 	return false
 }
 
-func (m *SafeMap) Foreach(callback func(key interface{}, value interface{}) (stop bool)) {
+func (m *SafeMap) Foreach(callback func(key interface{}, value interface{}) bool) error {
 	for i, shard := range m.dataShards {
 		mutex := m.mutexShards[i]
 		if iteratorShard(mutex, shard, callback) {
-			return
+			return nil
 		}
 	}
+	return nil
 }

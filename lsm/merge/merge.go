@@ -4,6 +4,13 @@ import (
 	"os"
 	"github.com/pister/yfs/lsm/base"
 	"github.com/pister/yfs/lsm/sst"
+	"path/filepath"
+	"github.com/pister/yfs/common/bloom"
+	"github.com/pister/yfs/common/fileutil"
+	"fmt"
+	"strings"
+	"strconv"
+	"sort"
 )
 
 type RichBlockData struct {
@@ -15,6 +22,7 @@ type RichBlockData struct {
 
 type sstFileDataBlockReader struct {
 	file        *os.File
+	fileName    string
 	currentData *RichBlockData
 	hasNext     bool
 }
@@ -26,11 +34,15 @@ func OpenSstFileDataBlockReader(fileName string) (*sstFileDataBlockReader, error
 	}
 	reader := new(sstFileDataBlockReader)
 	reader.file = file
+	reader.fileName = fileName
 	reader.hasNext = true
 	return reader, nil
 }
 
 func (sstReader *sstFileDataBlockReader) Close() error {
+	if sstReader.file == nil {
+		return nil
+	}
 	return sstReader.file.Close()
 }
 
@@ -97,8 +109,8 @@ func (sstReader *sstFileDataBlockReader) PopNextData() (*RichBlockData, error) {
 	return rbd, nil
 }
 
-func initSSTReaders(sstFiles []string) ([]*sstFileDataBlockReader, error ){
-	readers := make([]*sstFileDataBlockReader, len(sstFiles))
+func initSSTReaders(sstFiles []string) ([]*sstFileDataBlockReader, error) {
+	readers := make([]*sstFileDataBlockReader, 0, len(sstFiles))
 	for _, file := range sstFiles {
 		reader, err := OpenSstFileDataBlockReader(file)
 		if err != nil {
@@ -112,22 +124,120 @@ func initSSTReaders(sstFiles []string) ([]*sstFileDataBlockReader, error ){
 	return readers, nil
 }
 
+type dataAndReader struct {
+	data   *RichBlockData
+	reader *sstFileDataBlockReader
+}
 
-func MergeFiles(sstFiles []string, outFile string) error {
-	/*
-	tmpOutSSTable := outFile + "_tmp"
-	readers, err := initSSTReaders(sstFiles)
-	if err != nil {
-		return err
-	}
-	defer func(){
-		for _, r := range readers {
-			r.Close()
+func getToBeUseData(readers []*sstFileDataBlockReader) (*dataAndReader, error) {
+	var retValue *dataAndReader = nil
+	for _, reader := range readers {
+		data, err := reader.PeekNextData()
+		if err != nil {
+			return nil, err
 		}
-	}()
+		if data == nil {
+			continue
+		}
+		if retValue == nil {
+			retValue = &dataAndReader{data, reader}
+			continue
+		}
+		compareResult := sst.KeyCompare(retValue.data.key, data.key)
+		switch compareResult {
+		case sst.Equals:
+			if data.ts > retValue.data.ts {
+				// ignore the less one
+				retValue.reader.PopNextData()
+				retValue = &dataAndReader{data, reader}
+			} else {
+				// ignore the less one
+				reader.PopNextData()
+			}
+		case sst.Greater:
+			retValue = &dataAndReader{data, reader}
+		case sst.Less:
+			// do nothing
+		default:
+			// do nothing
+		}
+	}
+	return retValue, nil
+}
 
+type fileDataBlockReaders struct {
+	readers []*sstFileDataBlockReader
+}
 
-*/
+func (readers *fileDataBlockReaders) Foreach(callback func(key []byte, value interface{}) bool) error {
+	for {
+		da, err := getToBeUseData(readers.readers)
+		if err != nil {
+			return err
+		}
+		if da == nil {
+			return nil
+		}
+		bd := new(base.BlockData)
+		bd.Ts = da.data.ts
+		bd.Deleted = da.data.deleted
+		bd.Value = da.data.value
+		da.reader.PopNextData()
+		fmt.Println("da.data.key:", string(da.data.key))
+		callback(da.data.key, bd)
+	}
 	return nil
 }
 
+func merge(readers []*sstFileDataBlockReader, dir string, ts int64) (bloom.Filter, error) {
+	writer, err := sst.NewSSTableWriter(dir, sst.LevelB, ts)
+	if err != nil {
+		return nil, err
+	}
+	fdbReaders := &fileDataBlockReaders{readers: readers}
+	bloomFilter, err := writer.WriteFullData(fdbReaders)
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+
+	if err := writer.Commit(); err != nil {
+		return nil, err
+	}
+	// delete old sst files
+	for _, reader := range readers {
+		fileutil.DeleteFile(reader.fileName)
+	}
+	return bloomFilter, nil
+}
+
+func MergeFiles(files []string) (bloom.Filter, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	sstFiles := make([]base.TsFileName, 0, len(files))
+	for _, name := range files {
+		if base.SSTNamePattern.MatchString(name) {
+			post := strings.LastIndex(name, "_")
+			ts, err := strconv.ParseInt(name[post+1:], 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			sstFiles = append(sstFiles, base.TsFileName{name, ts})
+		}
+	}
+	sort.Sort(base.SSTFileSlice(sstFiles))
+	readers, err := initSSTReaders(files)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		for _, r := range readers {
+			if r != nil {
+				r.Close()
+			}
+		}
+	}()
+	file := sstFiles[len(sstFiles)-1]
+	dir, _ := filepath.Split(file.PathName)
+	return merge(readers, dir, file.Ts)
+}

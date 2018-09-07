@@ -293,10 +293,7 @@ func TestMultiRoutineRead(t *testing.T) {
 				y := rand.Int31n(40)
 				n := rand.Int31n(100000)
 				name := fmt.Sprintf("name-%d-%d", y, n)
-				t1 := time.Now().Unix()
 				value, err := lsm.Get([]byte(name))
-				t2 := time.Now().Unix()
-				fmt.Println(t2 - t1)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -338,7 +335,7 @@ func TestOpenLsm(t *testing.T) {
 	defer lsm1.Close()
 
 	t1 := time.Now().UnixNano() / 1000000
-	value, err := lsm1.Get([]byte("name-3-60619"))
+	value, err := lsm1.Get([]byte("name-9-99949"))
 	t2 := time.Now().UnixNano() / 1000000
 	fmt.Println(t2 - t1)
 	if err != nil {
@@ -349,26 +346,4 @@ func TestOpenLsm(t *testing.T) {
 	} else {
 		fmt.Println(string(value))
 	}
-}
-
-
-func TestSSTableReader_GetByKey(t *testing.T) {
-	tempDir := "/Users/songlihuang/temp/temp3/sstable_test"
-	fileutil.MkDirs(tempDir)
-	defer os.RemoveAll(tempDir)
-	lsm, err := OpenLsm(tempDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 100; i++ {
-		lsm.Put([]byte(fmt.Sprintf("name-%d", i)), []byte(fmt.Sprintf("value-%d", i)))
-	}
-
-	lsm.Delete([]byte("name-0"))
-
-	err = lsm.Flush()
-	if err != nil {
-		t.Fatal(err)
-	}
-
 }

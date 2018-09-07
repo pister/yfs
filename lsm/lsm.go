@@ -2,14 +2,12 @@ package lsm
 
 import (
 	"os"
-	"time"
 	"sync"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"strconv"
 	"path"
-	"regexp"
 	"github.com/pister/yfs/common/listutil"
 	"sort"
 	lg "github.com/pister/yfs/log"
@@ -35,20 +33,16 @@ type Lsm struct {
 	memMap      *switching.SwitchingMap
 	sstReaders  *listutil.CopyOnWriteList // type of *SSTableReader
 	mutex       sync.Mutex
-	flushLocker *lockutil.TryLocker
+	flushLocker *lockutil.ChanTryLocker
 	dir         string
 	ts          int64
 }
 
 func loadSSTableReaders(dir string) (*listutil.CopyOnWriteList, error) {
-	sstNamePattern, err := regexp.Compile(`^sst_[abc]_\d+$`)
-	if err != nil {
-		return nil, err
-	}
 	tsFiles := make([]base.TsFileName, 0, 32)
 	if err := filepath.Walk(dir, func(file string, info os.FileInfo, err error) error {
 		_, name := path.Split(file)
-		if sstNamePattern.MatchString(name) {
+		if base.SSTNamePattern.MatchString(name) {
 			post := strings.LastIndex(name, "_")
 			ts, err := strconv.ParseInt(name[post+1:], 10, 64)
 			if err != nil {
@@ -106,6 +100,7 @@ func prepareForOpenLsm(dir string) error {
 }
 
 func OpenLsm(dir string) (*Lsm, error) {
+	fileutil.MkDirs(dir)
 	if err := prepareForOpenLsm(dir); err != nil {
 		return nil, err
 	}
@@ -152,7 +147,7 @@ func (lsm *Lsm) Put(key []byte, value []byte) error {
 	action.op = actionTypePut
 	action.key = key
 	action.value = value
-	action.ts = uint64(time.Now().Unix())
+	action.ts = uint64(base.GetCurrentTs())
 	err := lsm.aheadLog.Append(action)
 	if err != nil {
 		return err
@@ -180,7 +175,7 @@ func (lsm *Lsm) Delete(key []byte) error {
 	action.version = defaultVersion
 	action.op = actionTypeDelete
 	action.key = key
-	action.ts = uint64(time.Now().Unix())
+	action.ts = uint64(base.GetCurrentTs())
 	err := lsm.aheadLog.Append(action)
 	if err != nil {
 		return err
@@ -276,6 +271,7 @@ func (lsm *Lsm) Flush() error {
 			}
 		}
 	}()
+
 	return nil
 }
 

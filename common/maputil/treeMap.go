@@ -55,11 +55,12 @@ func (m *TreeMap) Max() (key []byte, value interface{}) {
 	return nil, nil
 }
 
-func (m *TreeMap) Foreach(callback func(key []byte, value interface{}) bool ) {
+func (m *TreeMap) Foreach(callback func(key []byte, value interface{}) bool ) error {
 	it := m.tree.Iterator()
 	for it.Next() {
 		if callback(it.Key(), it.Value()) {
-			return
+			return nil
 		}
 	}
+	return nil
 }

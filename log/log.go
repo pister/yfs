@@ -90,7 +90,7 @@ func (c timePathList) Len() int {
 }
 
 func (c timePathList) Less(i, j int) bool {
-	return c[i].time.Unix() < c[j].time.Unix()
+	return c[i].time.UnixNano() < c[j].time.UnixNano()
 }
 
 func (c timePathList) Swap(i, j int) {
