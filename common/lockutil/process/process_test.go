@@ -4,6 +4,7 @@ import (
 	"testing"
 	"fmt"
 	"time"
+	"sync"
 )
 
 func TestOpenLockerTryLock(t *testing.T) {
@@ -26,9 +27,20 @@ func TestOpenLockerTryLock(t *testing.T) {
 }
 
 func TestOpenLockerLock(t *testing.T) {
-	locker := OpenLocker("/Users/songlihuang/temp/temp3/lock_test/yfs_lock")
-	locker.Lock()
-	fmt.Println("got lock!")
-	time.Sleep(10 * time.Second)
-	locker.Unlock()
+	wg := sync.WaitGroup{}
+	wg.Add(100)
+	for i:= 0; i < 100; i++ {
+		go func(i int) {
+			locker1 := OpenLocker("/Users/songlihuang/temp/temp3/lock_test/yfs_lock0")
+			x1 := locker1.TryLock()
+			fmt.Println("x-", i, x1)
+			if x1 {
+				time.Sleep(30 * time.Second)
+				locker1.Unlock()
+			}
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
 }

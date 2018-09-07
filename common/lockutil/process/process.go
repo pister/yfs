@@ -12,6 +12,7 @@ import (
 	"github.com/pister/yfs/common/lockutil"
 )
 
+// 注意：该锁不适合高并发情况!
 // process mutex lock base on socket port
 
 const requestMessage = "needlock"
@@ -90,6 +91,14 @@ func (locker *SocketTryLocker) lockIt() (bool, error) {
 		if err == nil {
 			break
 		}
+		got, err := locker.mayGetLock()
+		if err != nil {
+			panic(err)
+		}
+		if !got {
+			return false, nil
+		}
+		time.Sleep(1 * time.Second)
 	}
 	if err != nil {
 		return false, err
