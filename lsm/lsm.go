@@ -16,6 +16,7 @@ import (
 	"github.com/pister/yfs/common/fileutil"
 	"github.com/pister/yfs/lsm/sst"
 	"github.com/pister/yfs/lsm/base"
+	"github.com/pister/yfs/common/lockutil/process"
 )
 
 var log lg.Logger
@@ -33,7 +34,8 @@ type Lsm struct {
 	memMap      *switching.SwitchingMap
 	sstReaders  *listutil.CopyOnWriteList // type of *SSTableReader
 	mutex       sync.Mutex
-	flushLocker *lockutil.ChanTryLocker
+	flushLocker lockutil.TryLocker
+	dirLocker   lockutil.TryLocker
 	dir         string
 	ts          int64
 }
@@ -101,14 +103,21 @@ func prepareForOpenLsm(dir string) error {
 
 func OpenLsm(dir string) (*Lsm, error) {
 	fileutil.MkDirs(dir)
+	dirLocker := process.OpenLocker(fmt.Sprintf("%s/lsm_lock", dir))
+	if !dirLocker.TryLock() {
+		return nil, fmt.Errorf("the lsm dir: %s has opend by another proccess", dir)
+	}
 	if err := prepareForOpenLsm(dir); err != nil {
+		dirLocker.Unlock()
 		return nil, err
 	}
 	ww, err := createOrOpenFirstWalWrapper(dir)
 	if err != nil {
+		dirLocker.Unlock()
 		return nil, err
 	}
 	lsm := new(Lsm)
+	lsm.dirLocker = dirLocker
 	lsm.aheadLog = ww.aheadLog
 	lsm.memMap = switching.NewSwitchingMapWithMainData(ww.memMap)
 	lsm.dir = dir
@@ -116,6 +125,7 @@ func OpenLsm(dir string) (*Lsm, error) {
 	lsm.flushLocker = lockutil.NewTryLocker()
 	sstReaders, err := loadSSTableReaders(dir)
 	if err != nil {
+		dirLocker.Unlock()
 		return nil, err
 	}
 	lsm.sstReaders = sstReaders
@@ -129,7 +139,11 @@ func (lsm *Lsm) NeedFlush() bool {
 func (lsm *Lsm) Close() error {
 	lsm.flushLocker.Lock()
 	defer lsm.flushLocker.Unlock()
+
 	lsm.aheadLog.Close()
+	// release the dir locker
+	lsm.dirLocker.Unlock()
+
 	lsm.memMap = nil
 	lsm.sstReaders = nil
 	return nil

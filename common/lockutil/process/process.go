@@ -12,7 +12,7 @@ import (
 	"github.com/pister/yfs/common/lockutil"
 )
 
-// process mutex base on socket port
+// process mutex lock base on socket port
 
 const requestMessage = "needlock"
 const responseMessage = "locked"
