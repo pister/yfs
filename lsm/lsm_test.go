@@ -360,15 +360,15 @@ func TestCompact(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 
-	wg.Add(12)
-	for x := 0; x < 10; x++ {
+	wg.Add(4)
+	for x := 0; x < 2; x++ {
 		go func(x int) {
 			for i := 0; i < 1000000; i++ {
 				n := rand.Int31n(100000)
 				name := fmt.Sprintf("name-%d-%d", x, n)
 				value := fmt.Sprintf("value-%d-%d", x, n)
 				lsm.Put([]byte(name), []byte(value))
-				time.Sleep(time.Duration(rand.Int31n(100)) * time.Millisecond)
+			//	time.Sleep(time.Duration(rand.Int31n(300)) * time.Millisecond)
 			}
 			wg.Done()
 		}(x)
@@ -379,7 +379,7 @@ func TestCompact(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 1000000; i++ {
-				y := rand.Int31n(20)
+				y := rand.Int31n(4)
 				n := rand.Int31n(100000)
 				name := fmt.Sprintf("name-%d-%d", y, n)
 				value, tracker, err := lsm.GetWithTracker([]byte(name))
