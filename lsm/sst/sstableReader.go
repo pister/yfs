@@ -342,7 +342,7 @@ func (reader *SSTableReader) getByDataIndexAndCompareByKey(dataIndex uint32, key
 }
 */
 
-func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32) (*base.BlockData, /*open success*/ bool, error) {
+func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32, tracker *base.ReaderTracker) (*base.BlockData, /*open success*/ bool, error) {
 	var resultBlockData *base.BlockData = nil
 	openSuccess, err := reader.reader.ReadSeeker(func(reader io.ReadSeeker) error {
 		lowBound := 0
@@ -358,6 +358,7 @@ func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32) (*bas
 			}
 			pos = newPos
 			dataIndex := dataIndexes[pos]
+			tracker.SearchCount += 1
 			blockData, compareResult, err := readByDataIndexAndCompareByKey(reader, dataIndex, key)
 			if err != nil {
 				return err
@@ -391,12 +392,20 @@ func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32) (*bas
 }
 
 func (reader *SSTableReader) GetByKey(key []byte) (*base.BlockData, bool, error) {
+	data, success, _, err := reader.GetByKeyWithTrack(key)
+	return data, success, err
+}
+
+func (reader *SSTableReader) GetByKeyWithTrack(key []byte) (*base.BlockData, bool, base.ReaderTracker, error) {
+	tracker := base.ReaderTracker{FileName:reader.fileName}
 	if !reader.filter.Hit(key) {
-		return nil, true, nil
+		tracker.BloomHit = true
+		return nil, true, tracker, nil
 	}
 	dataIndexes, err := reader.getDataIndexes()
 	if err != nil {
-		return nil, false, err
+		return nil, false, tracker, err
 	}
-	return reader.searchByKey(key, dataIndexes)
+	data, success, err := reader.searchByKey(key, dataIndexes, &tracker)
+	return data, success, tracker, err
 }

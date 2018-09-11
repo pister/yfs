@@ -3,6 +3,8 @@ package base
 import (
 	"regexp"
 	"time"
+	"fmt"
+	"path/filepath"
 )
 
 type TsFileName struct {
@@ -76,4 +78,25 @@ type DataIndex struct {
 
 func GetCurrentTs() int64 {
 	return time.Now().UnixNano()
+}
+
+type ReaderTracker struct {
+	FileName    string
+	BloomHit    bool
+	SearchCount int
+}
+
+func (readerTracker ReaderTracker) String() string {
+	_, file := filepath.Split(readerTracker.FileName)
+	return fmt.Sprintf("<%s - bloom:%v, searchCount:%d>", file, readerTracker.BloomHit, readerTracker.SearchCount)
+}
+
+type GetTrackInfo struct {
+	EscapeInMillisecond int64
+	ReaderTrackers      []ReaderTracker
+	InMem               bool
+}
+
+func (trackInfo *GetTrackInfo) String() string {
+	return fmt.Sprintf("{escape:%d, mem:%v, readers:%v}", trackInfo.EscapeInMillisecond, trackInfo.InMem, trackInfo.ReaderTrackers)
 }

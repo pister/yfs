@@ -144,7 +144,7 @@ func OpenLsm(dir string) (*Lsm, error) {
 func (lsm *Lsm) startCompactTask() {
 	go func() {
 		for range lsm.compactTicker.C {
-			if !lsm.NeedCompact() {
+			if !lsm.needCompact() {
 				continue
 			}
 			err := lsm.Compact()
@@ -235,15 +235,18 @@ func (lsm *Lsm) Delete(key []byte) error {
 	return nil
 }
 
-func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*base.BlockData, bool, error) {
+func (lsm *Lsm) findBlockDataFromSSTables(key []byte, readerTrackers *[]base.ReaderTracker) (*base.BlockData, bool, error) {
 	var blockDataFound *base.BlockData = nil
 	var resultOpenSuccess bool
 	if err := lsm.sstReaders.Foreach(func(item interface{}) (bool, error) {
 		sstReader := item.(*sst.SSTableReader)
-		blockData, openSuccess, err := sstReader.GetByKey(key)
+		blockData, openSuccess, tracker, err := sstReader.GetByKeyWithTrack(key)
 		resultOpenSuccess = openSuccess
 		if err != nil {
 			return true, err
+		}
+		if readerTrackers != nil {
+			*readerTrackers = append(*readerTrackers, tracker)
 		}
 		if blockData != nil {
 			blockDataFound = blockData
@@ -259,21 +262,28 @@ func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*base.BlockData, bool, er
 	return blockDataFound, resultOpenSuccess, nil
 }
 
-func (lsm *Lsm) Get(key []byte) ([]byte, error) {
+func (lsm *Lsm) GetWithTracker(key []byte) ([]byte, *base.GetTrackInfo, error) {
+	trackInfo := new(base.GetTrackInfo)
+	ts := time.Now().UnixNano()
+	defer func() {
+		trackInfo.EscapeInMillisecond = (time.Now().UnixNano() - ts) / 1000000
+	}()
 	ds, found := lsm.memMap.Get(key)
 	if found {
+		trackInfo.InMem = true
 		bd := ds.(*base.BlockData)
 		if bd.Deleted == base.Deleted {
-			return nil, nil
+			return nil, trackInfo, nil
 		}
-		return bd.Value, nil
+		return bd.Value, trackInfo, nil
 	}
 	var bd *base.BlockData
 	var err error
 	var openSuccess bool
 	// try 3 times, when compact
 	for i := 0; i < 3; i++ {
-		bd, openSuccess, err = lsm.findBlockDataFromSSTables(key)
+		trackInfo.ReaderTrackers = make([]base.ReaderTracker, 0, 4)
+		bd, openSuccess, err = lsm.findBlockDataFromSSTables(key, &trackInfo.ReaderTrackers)
 		if err == nil {
 			break
 		}
@@ -283,17 +293,22 @@ func (lsm *Lsm) Get(key []byte) ([]byte, error) {
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, trackInfo, err
 	}
 	if bd != nil {
 		if bd.Deleted == base.Deleted {
-			return nil, nil
+			return nil, trackInfo, nil
 		} else {
-			return bd.Value, nil
+			return bd.Value, trackInfo, nil
 		}
 	} else {
-		return nil, nil
+		return nil, trackInfo, nil
 	}
+}
+
+func (lsm *Lsm) Get(key []byte) ([]byte, error) {
+	data, _, err := lsm.GetWithTracker(key)
+	return data, err
 }
 
 func (lsm *Lsm) Flush() error {
@@ -349,7 +364,7 @@ func (lsm *Lsm) getReaders() []*sst.SSTableReader {
 	return readers
 }
 
-func (lsm *Lsm) NeedCompact() bool {
+func (lsm *Lsm) needCompact() bool {
 	readers := lsm.getReaders()
 	return len(readers) >= compactThreshold
 }

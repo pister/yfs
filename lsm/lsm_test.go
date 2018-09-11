@@ -382,17 +382,15 @@ func TestCompact(t *testing.T) {
 				y := rand.Int31n(20)
 				n := rand.Int31n(100000)
 				name := fmt.Sprintf("name-%d-%d", y, n)
-				ts1 := time.Now().UnixNano()
-				value, err := lsm.Get([]byte(name))
-				ts := (time.Now().UnixNano() - ts1) /1000000
+				value, tracker, err := lsm.GetWithTracker([]byte(name))
 				if err != nil {
 					t.Fatal(err)
 				}
 				if value == nil {
-					fmt.Println(name, "=>", value, " in ", ts ," ms")
+					fmt.Println(name, "not found", tracker)
 					notHit.Increment()
 				} else {
-					fmt.Println(name, "=>", string(value), " in ", ts ," ms")
+					fmt.Println(name, "=>", string(value), " by ",  tracker)
 					if string(value) == fmt.Sprintf("value-%d-%d", y, n) {
 						hit.Increment()
 					} else {
