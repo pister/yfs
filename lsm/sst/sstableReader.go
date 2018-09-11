@@ -11,12 +11,15 @@ import (
 	"github.com/pister/yfs/common/hashutil"
 	"github.com/pister/yfs/common/bitset"
 	"github.com/pister/yfs/lsm/base"
+	"strconv"
 )
 
 type SSTableReader struct {
 	filter   bloom.Filter
 	reader   *fileutil.ConcurrentReadFile
 	fileSize int64
+	level    uint32
+	fileName string
 }
 
 func OpenSSTableReader(sstFile string) (*SSTableReader, error) {
@@ -29,8 +32,11 @@ func OpenSSTableReaderWithBloomFilter(sstFile string, filter bloom.Filter) (*SST
 	if len(parts) < 3 {
 		return nil, fmt.Errorf("unkonwn sstable files: %s", name)
 	}
-	level := LevelFromName(parts[1])
-	r, err := fileutil.OpenAsConcurrentReadFile(sstFile, concurrentSizeFromLevel(level))
+	level, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	r, err := fileutil.OpenAsConcurrentReadFile(sstFile, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +50,11 @@ func OpenSSTableReaderWithBloomFilter(sstFile string, filter bloom.Filter) (*SST
 			return nil, err
 		}
 	}
-	//data, _ := filter.GetBitData()
-	//s := base64util.EncodeBase64ToString(data)
-	//fmt.Println(s)
 	reader := new(SSTableReader)
 	reader.filter = filter
 	reader.reader = r
+	reader.level = uint32(level)
+	reader.fileName = sstFile
 	reader.fileSize = r.GetInitFileSize()
 	return reader, nil
 }
@@ -69,7 +74,7 @@ func readBloomFilter(r *fileutil.ConcurrentReadFile) (bloom.Filter, error) {
 	}
 	var bitSize uint32 = 0
 	var bitBuf []byte
-	if err := r.SeekForReading(int64(bloomFilterPosition), func(reader io.Reader) error {
+	openSuccess, err := r.SeekForReading(int64(bloomFilterPosition), func(reader io.Reader) error {
 		header := make([]byte, 12)
 		if _, err := reader.Read(header); err != nil {
 			return err
@@ -88,8 +93,12 @@ func readBloomFilter(r *fileutil.ConcurrentReadFile) (bloom.Filter, error) {
 			return err
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
+	}
+	if !openSuccess {
+		return nil, fmt.Errorf("open error")
 	}
 	return bloom.NewUnsafeBloomFilterWithBitSize(bitset.NewBitSetWithInitData(bitSize, bitBuf)), nil
 }
@@ -104,9 +113,12 @@ func readFooter(r *fileutil.ConcurrentReadFile) (uint32, uint32, error) {
 	*/
 	initFileSize := r.GetInitFileSize()
 	buf := make([]byte, 12)
-	_, err := r.SeekAndReadData(initFileSize-12, buf)
+	openSuccess, _, err := r.SeekAndReadData(initFileSize-12, buf)
 	if err != nil {
 		return 0, 0, err
+	}
+	if !openSuccess {
+		return 0, 0, fmt.Errorf("open fail")
 	}
 	dataIndexStartPosition := bytesutil.GetUint32FromBytes(buf, 4)
 	bloomFilterPosition := bytesutil.GetUint32FromBytes(buf, 8)
@@ -119,8 +131,17 @@ func readFooter(r *fileutil.ConcurrentReadFile) (uint32, uint32, error) {
 	return dataIndexStartPosition, bloomFilterPosition, nil
 }
 
+// this will be block when waiting for another's reading
 func (reader *SSTableReader) Close() error {
 	return reader.reader.Close()
+}
+
+func (reader *SSTableReader) GetLevel() uint32 {
+	return reader.level
+}
+
+func (reader *SSTableReader) GetFileName() string {
+	return reader.fileName
 }
 
 func (reader *SSTableReader) getDataIndexes() ([]uint32, error) {
@@ -129,7 +150,7 @@ func (reader *SSTableReader) getDataIndexes() ([]uint32, error) {
 		return nil, err
 	}
 	dataIndexes := make([]uint32, 0, 256)
-	if err := reader.reader.SeekForReading(int64(dataIndexStartPosition), func(reader io.Reader) error {
+	openSuccess, err := reader.reader.SeekForReading(int64(dataIndexStartPosition), func(reader io.Reader) error {
 		/*
 		2 - bytes magic code
 		1 - byte not used
@@ -152,8 +173,12 @@ func (reader *SSTableReader) getDataIndexes() ([]uint32, error) {
 			dataIndexes = append(dataIndexes, dataIndex)
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
+	}
+	if !openSuccess {
+		return nil, fmt.Errorf("open fail")
 	}
 	return dataIndexes, nil
 }
@@ -235,6 +260,46 @@ func ReadDataHeader(reader io.Reader) (*base.BlockDataHeader, error) {
 	return blockDataHeader, nil
 }
 
+func readByDataIndexAndCompareByKey(reader io.ReadSeeker, dataIndex uint32, key []byte) (*base.BlockData, KeyCompareResult, error) {
+	var blockData = new(base.BlockData)
+	var compareResult KeyCompareResult
+	if _, err := reader.Seek(int64(dataIndex), 0); err != nil {
+		return nil, compareResult, err
+	}
+	dataHeader, err := ReadDataHeader(reader)
+	if err != nil {
+		return nil, compareResult, err
+	}
+	if dataHeader == nil {
+		return nil, compareResult, fmt.Errorf("not found data")
+	}
+	if dataHeader.MagicCode1 != dataMagicCode1 || dataHeader.MagicCode2 != dataMagicCode2 {
+		return nil, compareResult, fmt.Errorf("data index magic code not match")
+	}
+	if dataHeader.BlockType != BlockTypeData {
+		return nil, compareResult, fmt.Errorf("block type not match")
+	}
+	compareResult = KeyCompare(key, dataHeader.Key)
+	if compareResult != Equals {
+		return nil, compareResult, nil
+	}
+	valueBuf := make([]byte, dataHeader.ValueLength)
+	if _, err := reader.Read(valueBuf); err != nil {
+		return nil, compareResult, err
+	}
+	dataSumByCal := hashutil.SumHash32(valueBuf)
+	if dataSumByCal != dataHeader.DataSum {
+		return nil, compareResult, fmt.Errorf("sum not match")
+	}
+	blockData.Value = valueBuf
+	if compareResult != Equals {
+		return nil, compareResult, nil
+	} else {
+		return blockData, compareResult, nil
+	}
+}
+
+/*
 func (reader *SSTableReader) getByDataIndexAndCompareByKey(dataIndex uint32, key []byte) (*base.BlockData, KeyCompareResult, error) {
 	var blockData = new(base.BlockData)
 	var compareResult KeyCompareResult
@@ -275,51 +340,63 @@ func (reader *SSTableReader) getByDataIndexAndCompareByKey(dataIndex uint32, key
 		return blockData, compareResult, nil
 	}
 }
+*/
 
-func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32) (*base.BlockData, error) {
-	lowBound := 0
-	upBound := len(dataIndexes)
-	var pos = -1
-	for {
-		if upBound <= lowBound {
-			return nil, nil
-		}
-		newPos := (upBound + lowBound) / 2
-		if newPos == pos {
-			return nil, nil
-		}
-		pos = newPos
-		dataIndex := dataIndexes[pos]
-		blockData, compareResult, err := reader.getByDataIndexAndCompareByKey(dataIndex, key)
-		if err != nil {
-			return nil, err
-		}
-		if compareResult == Equals {
-			return blockData, nil
-		}
-		if compareResult == Greater {
-			if lowBound < pos {
-				lowBound = pos
-			} else {
-				lowBound += 1
+func (reader *SSTableReader) searchByKey(key []byte, dataIndexes []uint32) (*base.BlockData, /*open success*/ bool, error) {
+	var resultBlockData *base.BlockData = nil
+	openSuccess, err := reader.reader.ReadSeeker(func(reader io.ReadSeeker) error {
+		lowBound := 0
+		upBound := len(dataIndexes)
+		var pos = -1
+		for {
+			if upBound <= lowBound {
+				return nil
 			}
-		} else {
-			if upBound > pos {
-				upBound = pos
+			newPos := (upBound + lowBound) / 2
+			if newPos == pos {
+				return nil
+			}
+			pos = newPos
+			dataIndex := dataIndexes[pos]
+			blockData, compareResult, err := readByDataIndexAndCompareByKey(reader, dataIndex, key)
+			if err != nil {
+				return err
+			}
+			if compareResult == Equals {
+				resultBlockData = blockData
+				return nil
+			}
+			if compareResult == Greater {
+				if lowBound < pos {
+					lowBound = pos
+				} else {
+					lowBound += 1
+				}
 			} else {
-				upBound -= 1
+				if upBound > pos {
+					upBound = pos
+				} else {
+					upBound -= 1
+				}
 			}
 		}
+	})
+	if err != nil {
+		return nil, openSuccess, err
 	}
+	if !openSuccess {
+		return nil, openSuccess, nil
+	}
+	return resultBlockData, true, nil
 }
 
-func (reader *SSTableReader) GetByKey(key []byte) (*base.BlockData, error) {
+func (reader *SSTableReader) GetByKey(key []byte) (*base.BlockData, bool, error) {
 	if !reader.filter.Hit(key) {
-		return nil, nil
+		return nil, true, nil
 	}
 	dataIndexes, err := reader.getDataIndexes()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	return reader.searchByKey(key, dataIndexes)
 }

@@ -29,7 +29,7 @@ func (sf SSTFileSlice) Swap(i, j int) {
 var SSTNamePattern *regexp.Regexp
 
 func init() {
-	p, err := regexp.Compile(`sst_[abc]_\d+`)
+	p, err := regexp.Compile(`^sst_\d+_\d+$`)
 	if err != nil {
 		panic(err)
 	}

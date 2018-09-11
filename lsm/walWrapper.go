@@ -96,7 +96,7 @@ func openWalWrapperByTsFile(walFile base.TsFileName) (*walWrapper, error) {
 }
 
 func WalFileToSSTable(dir string, ww *walWrapper) (string, bloom.Filter, error) {
-	writer, err := sst.NewSSTableWriter(dir, sst.LevelA, ww.ts)
+	writer, err := sst.NewSSTableWriter(dir, 0, ww.ts)
 	if err != nil {
 		return "", nil, err
 	}
@@ -104,7 +104,7 @@ func WalFileToSSTable(dir string, ww *walWrapper) (string, bloom.Filter, error) 
 	if dataLength == 0 {
 		return "", nil, nil
 	}
-	bloomFilter, err := writer.WriteFullData(ww.memMap)
+	bloomFilter, err := writer.WriteFullData(0, ww.memMap)
 	if err := writer.Close(); err != nil {
 		return "", nil, err
 	}

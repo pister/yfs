@@ -6,11 +6,10 @@ import (
 	"github.com/pister/yfs/lsm/sst"
 	"path/filepath"
 	"github.com/pister/yfs/common/bloom"
-	"github.com/pister/yfs/common/fileutil"
-	"fmt"
 	"strings"
 	"strconv"
 	"sort"
+	"github.com/pister/yfs/common/fileutil"
 )
 
 type RichBlockData struct {
@@ -183,52 +182,61 @@ func (readers *fileDataBlockReaders) Foreach(callback func(key []byte, value int
 		bd.Deleted = da.data.deleted
 		bd.Value = da.data.value
 		da.reader.PopNextData()
-		fmt.Println("da.data.key:", string(da.data.key))
 		callback(da.data.key, bd)
 	}
 	return nil
 }
 
-func merge(readers []*sstFileDataBlockReader, dir string, ts int64) (bloom.Filter, error) {
-	writer, err := sst.NewSSTableWriter(dir, sst.LevelB, ts)
+func merge(readers []*sstFileDataBlockReader, dir string, level uint32, ts int64, deleteOldFiles bool) (bloom.Filter, string, error) {
+	writer, err := sst.NewSSTableWriter(dir, level, ts)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	fdbReaders := &fileDataBlockReaders{readers: readers}
-	bloomFilter, err := writer.WriteFullData(fdbReaders)
+	bloomFilter, err := writer.WriteFullData(level, fdbReaders)
 	if err := writer.Close(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if err := writer.Commit(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	// delete old sst files
-	for _, reader := range readers {
-		fileutil.DeleteFile(reader.fileName)
+	if deleteOldFiles {
+		for _, reader := range readers {
+			fileutil.DeleteFile(reader.fileName)
+		}
 	}
-	return bloomFilter, nil
+	return bloomFilter, writer.GetFileName(), nil
 }
 
-func MergeFiles(files []string) (bloom.Filter, error) {
+func CompactFiles(files []string, deleteOldFiles bool) (bloom.Filter, string, error) {
 	if len(files) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
+	maxLevel := 0
 	sstFiles := make([]base.TsFileName, 0, len(files))
-	for _, name := range files {
+	for _, file := range files {
+		_, name := filepath.Split(file)
 		if base.SSTNamePattern.MatchString(name) {
-			post := strings.LastIndex(name, "_")
-			ts, err := strconv.ParseInt(name[post+1:], 10, 64)
+			parts := strings.Split(name, "_")
+			level, err := strconv.Atoi(parts[1])
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
-			sstFiles = append(sstFiles, base.TsFileName{name, ts})
+			if level > maxLevel {
+				maxLevel = level
+			}
+			ts, err := strconv.ParseInt(parts[2], 10, 64)
+			if err != nil {
+				return nil, "", err
+			}
+			sstFiles = append(sstFiles, base.TsFileName{PathName: file, Ts: ts})
 		}
 	}
 	sort.Sort(base.SSTFileSlice(sstFiles))
 	readers, err := initSSTReaders(files)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() {
 		for _, r := range readers {
@@ -239,5 +247,5 @@ func MergeFiles(files []string) (bloom.Filter, error) {
 	}()
 	file := sstFiles[len(sstFiles)-1]
 	dir, _ := filepath.Split(file.PathName)
-	return merge(readers, dir, file.Ts)
+	return merge(readers, dir, uint32(maxLevel)+1, file.Ts, deleteOldFiles)
 }

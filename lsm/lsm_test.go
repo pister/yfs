@@ -347,3 +347,73 @@ func TestOpenLsm(t *testing.T) {
 		fmt.Println(string(value))
 	}
 }
+
+func TestCompact(t *testing.T) {
+	tempDir := "/Users/songlihuang/temp/temp3/lsm_test_compact"
+	fileutil.MkDirs(tempDir)
+	//	defer os.RemoveAll(tempDir)
+	lsm, err := OpenLsm(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lsm.Close()
+
+	wg := sync.WaitGroup{}
+
+	wg.Add(12)
+	for x := 0; x < 10; x++ {
+		go func(x int) {
+			for i := 0; i < 1000000; i++ {
+				n := rand.Int31n(100000)
+				name := fmt.Sprintf("name-%d-%d", x, n)
+				value := fmt.Sprintf("value-%d-%d", x, n)
+				lsm.Put([]byte(name), []byte(value))
+				time.Sleep(time.Duration(rand.Int31n(100)) * time.Millisecond)
+			}
+			wg.Done()
+		}(x)
+	}
+	hit := atomicutil.NewAtomicUint64(0)
+	notHit := atomicutil.NewAtomicUint64(0)
+	for x := 0; x < 2; x++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 1000000; i++ {
+				y := rand.Int31n(20)
+				n := rand.Int31n(100000)
+				name := fmt.Sprintf("name-%d-%d", y, n)
+				ts1 := time.Now().UnixNano()
+				value, err := lsm.Get([]byte(name))
+				ts := (time.Now().UnixNano() - ts1) /1000000
+				if err != nil {
+					t.Fatal(err)
+				}
+				if value == nil {
+					fmt.Println(name, "=>", value, " in ", ts ," ms")
+					notHit.Increment()
+				} else {
+					fmt.Println(name, "=>", string(value), " in ", ts ," ms")
+					if string(value) == fmt.Sprintf("value-%d-%d", y, n) {
+						hit.Increment()
+					} else {
+						notHit.Increment()
+						t.Fatal("error for not match!!!!")
+					}
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+
+		}()
+	}
+
+	go func() {
+		for {
+			time.Sleep(2 * time.Second) // wait for some routine end...
+			a := hit.Get()
+			b := notHit.Get()
+			fmt.Println("=============hit", hit.Get(), "not hit:", notHit.Get(), " total:", hit.Get() + notHit.Get(), "hit rate:", float64(a)/(float64(a)+float64(b)))
+		}
+	}()
+
+	wg.Wait()
+}

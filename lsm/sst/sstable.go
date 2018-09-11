@@ -72,6 +72,22 @@ const (
 	BlockTypeFooter       = 8
 )
 
+
+func bloomBitSizeFromLevel(level uint32) uint32 {
+	if level < 10 {
+		return 2 * 1024 * 1024
+	}
+	if level < 20 {
+		return 3 * 1024 * 1024
+	}
+	if level < 100 {
+		return 10 * 1024 * 1024
+	}
+	return 20 * 1024 * 1024
+}
+
+/*
+
 type SSTableLevel int
 
 const (
@@ -122,12 +138,13 @@ func bloomBitSizeFromLevel(level SSTableLevel) uint32 {
 func concurrentSizeFromLevel(level SSTableLevel) int {
 	switch level {
 	case LevelA:
-		return 4
+		return 1
 	case LevelB:
-		return 6
+		return 1
 	case LevelC:
-		return 10
+		return 1
 	default:
-		return 4
+		return 1
 	}
 }
+*/

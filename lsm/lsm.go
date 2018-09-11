@@ -17,6 +17,8 @@ import (
 	"github.com/pister/yfs/lsm/sst"
 	"github.com/pister/yfs/lsm/base"
 	"github.com/pister/yfs/common/lockutil/process"
+	"time"
+	"github.com/pister/yfs/lsm/merge"
 )
 
 var log lg.Logger
@@ -29,15 +31,19 @@ func init() {
 	log = l
 }
 
+const compactThreshold = 3
+
 type Lsm struct {
-	aheadLog    *AheadLog
-	memMap      *switching.SwitchingMap
-	sstReaders  *listutil.CopyOnWriteList // type of *SSTableReader
-	mutex       sync.Mutex
-	flushLocker lockutil.TryLocker
-	dirLocker   lockutil.TryLocker
-	dir         string
-	ts          int64
+	aheadLog      *AheadLog
+	memMap        *switching.SwitchingMap
+	sstReaders    *listutil.CopyOnWriteList // type of *SSTableReader
+	mutex         sync.Mutex
+	flushLocker   lockutil.TryLocker
+	compactLocker lockutil.TryLocker
+	dirLocker     lockutil.TryLocker
+	dir           string
+	ts            int64
+	compactTicker *time.Ticker
 }
 
 func loadSSTableReaders(dir string) (*listutil.CopyOnWriteList, error) {
@@ -123,13 +129,30 @@ func OpenLsm(dir string) (*Lsm, error) {
 	lsm.dir = dir
 	lsm.ts = ww.ts
 	lsm.flushLocker = lockutil.NewTryLocker()
+	lsm.compactLocker = lockutil.NewTryLocker()
 	sstReaders, err := loadSSTableReaders(dir)
 	if err != nil {
 		dirLocker.Unlock()
 		return nil, err
 	}
 	lsm.sstReaders = sstReaders
+	lsm.compactTicker = time.NewTicker(5 * time.Second)
+	lsm.startCompactTask()
 	return lsm, nil
+}
+
+func (lsm *Lsm) startCompactTask() {
+	go func() {
+		for range lsm.compactTicker.C {
+			if !lsm.NeedCompact() {
+				continue
+			}
+			err := lsm.Compact()
+			if err != nil {
+				log.Info("compact error %s", err)
+			}
+		}
+	}()
 }
 
 func (lsm *Lsm) NeedFlush() bool {
@@ -140,12 +163,21 @@ func (lsm *Lsm) Close() error {
 	lsm.flushLocker.Lock()
 	defer lsm.flushLocker.Unlock()
 
+	lsm.compactTicker.Stop()
+
 	lsm.aheadLog.Close()
+
 	// release the dir locker
 	lsm.dirLocker.Unlock()
 
-	lsm.memMap = nil
+	lsm.sstReaders.Foreach(func(item interface{}) (bool, error) {
+		reader := item.(*sst.SSTableReader)
+		reader.Close()
+		return false, nil
+	})
 	lsm.sstReaders = nil
+	lsm.memMap = nil
+
 	return nil
 }
 
@@ -203,11 +235,13 @@ func (lsm *Lsm) Delete(key []byte) error {
 	return nil
 }
 
-func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*base.BlockData, error) {
+func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*base.BlockData, bool, error) {
 	var blockDataFound *base.BlockData = nil
+	var resultOpenSuccess bool
 	if err := lsm.sstReaders.Foreach(func(item interface{}) (bool, error) {
 		sstReader := item.(*sst.SSTableReader)
-		blockData, err := sstReader.GetByKey(key)
+		blockData, openSuccess, err := sstReader.GetByKey(key)
+		resultOpenSuccess = openSuccess
 		if err != nil {
 			return true, err
 		}
@@ -215,11 +249,14 @@ func (lsm *Lsm) findBlockDataFromSSTables(key []byte) (*base.BlockData, error) {
 			blockDataFound = blockData
 			return true, nil
 		}
+		if !resultOpenSuccess {
+			return true, nil
+		}
 		return false, nil
 	}); err != nil {
-		return nil, err
+		return nil, resultOpenSuccess, err
 	}
-	return blockDataFound, nil
+	return blockDataFound, resultOpenSuccess, nil
 }
 
 func (lsm *Lsm) Get(key []byte) ([]byte, error) {
@@ -231,7 +268,20 @@ func (lsm *Lsm) Get(key []byte) ([]byte, error) {
 		}
 		return bd.Value, nil
 	}
-	bd, err := lsm.findBlockDataFromSSTables(key)
+	var bd *base.BlockData
+	var err error
+	var openSuccess bool
+	// try 3 times, when compact
+	for i := 0; i < 3; i++ {
+		bd, openSuccess, err = lsm.findBlockDataFromSSTables(key)
+		if err == nil {
+			break
+		}
+		if !openSuccess {
+			// try again
+			continue
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +329,7 @@ func (lsm *Lsm) Flush() error {
 				lsm.memMap.MergeToMain()
 				log.Info("open sst %s error:", sstFilePath)
 			} else {
-				lsm.sstReaders.Add(reader)
+				lsm.sstReaders.AddFirst(reader)
 				lsm.memMap.CleanSwitch()
 				log.Info("flush finish.")
 			}
@@ -289,7 +339,75 @@ func (lsm *Lsm) Flush() error {
 	return nil
 }
 
+func (lsm *Lsm) getReaders() []*sst.SSTableReader {
+	readers := make([]*sst.SSTableReader, 0, 8)
+	lsm.sstReaders.Foreach(func(item interface{}) (bool, error) {
+		reader := item.(*sst.SSTableReader)
+		readers = append(readers, reader)
+		return false, nil
+	})
+	return readers
+}
+
+func (lsm *Lsm) NeedCompact() bool {
+	readers := lsm.getReaders()
+	return len(readers) >= compactThreshold
+}
+
+func selectReadersToCompact(readers []*sst.SSTableReader) []*sst.SSTableReader {
+	readersLength := len(readers)
+	if readersLength < compactThreshold {
+		return nil
+	}
+	sort.Slice(readers, func(i, j int) bool {
+		return readers[i].GetLevel() < readers[j].GetLevel()
+	})
+	return readers[0:2*readersLength/3]
+}
+
 func (lsm *Lsm) Compact() error {
+	if !lsm.compactLocker.TryLock() {
+		log.Info("need compact, but another compact is not finish.")
+		return nil
+	}
+	defer lsm.compactLocker.Unlock()
+
+	readers := lsm.getReaders()
+
+	if len(readers) < compactThreshold {
+		return nil
+	}
+
+	log.Info("start compact...")
+	readers = selectReadersToCompact(readers)
+
+	compactingFiles := make([]string, 0, len(readers))
+	compactingReaders := make([]interface{}, 0, len(readers))
+	for _, reader := range readers {
+		compactingFiles = append(compactingFiles, reader.GetFileName())
+		compactingReaders = append(compactingReaders, reader)
+	}
+
+	filter, sstFile, err := merge.CompactFiles(compactingFiles, false)
+	if err != nil {
+		return err
+	}
+	reader, err := sst.OpenSSTableReaderWithBloomFilter(sstFile, filter)
+	if err != nil {
+		// open error
+		return err
+	}
+
+	lsm.sstReaders.AddLast(reader)
+	lsm.sstReaders.Delete(compactingReaders...)
+
+	for _, reader := range compactingReaders {
+		r := reader.(*sst.SSTableReader)
+		r.Close()
+		fileutil.DeleteFile(r.GetFileName())
+	}
+
+	log.Info("compact finish.")
 
 	return nil
 }

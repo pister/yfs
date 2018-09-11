@@ -21,9 +21,9 @@ func (writer *SSTableWriter) GetFileName() string {
 	return writer.fileName
 }
 
-func NewSSTableWriter(dir string, level SSTableLevel, ts int64) (*SSTableWriter, error) {
+func NewSSTableWriter(dir string, level uint32, ts int64) (*SSTableWriter, error) {
 	ssTableWriter := new(SSTableWriter)
-	fileName := fmt.Sprintf("%s%c%s_%s_%d", dir, filepath.Separator, "sst", level.Name(), ts)
+	fileName := filepath.Join(dir, fmt.Sprintf("%s_%d_%d", "sst", level, ts))
 	tempFileName := fileName + "_tmp"
 	file, err := os.OpenFile(tempFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
@@ -156,8 +156,9 @@ type ForeachAble interface {
 	Foreach(callback func(key []byte, value /*base.BlockData*/ interface{}) bool) error
 }
 
-func (writer *SSTableWriter) WriteFullData(memMap ForeachAble) (bloom.Filter, error) {
-	bloomFilter := bloom.NewUnsafeBloomFilter(bloomBitSizeFromLevel(LevelA))
+func (writer *SSTableWriter) WriteFullData(level uint32, memMap ForeachAble) (bloom.Filter, error) {
+	// size
+	bloomFilter := bloom.NewUnsafeBloomFilter(bloomBitSizeFromLevel(level))
 	var err error
 	// 1, write data
 	dataIndexes := make([]*base.DataIndex, 0, 64)

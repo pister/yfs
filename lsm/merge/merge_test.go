@@ -66,7 +66,7 @@ func TestMergeFiles1(t *testing.T) {
 		return nil
 	})
 
-	MergeFiles(sstFiles)
+	CompactFiles(sstFiles, true)
 
 	lsm2, err := lsm.OpenLsm("/Users/songlihuang/temp/temp3/lsm_merge_test")
 	if err != nil {

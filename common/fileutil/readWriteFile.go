@@ -54,35 +54,51 @@ func (cfReader *ConcurrentReadFile) GetInitFileSize() int64 {
 	return cfReader.initFileSize
 }
 
-func (cfReader *ConcurrentReadFile) SeekAndReadData(pos int64, buf []byte) (int, error) {
+func (cfReader *ConcurrentReadFile) SeekAndReadData(pos int64, buf []byte) ( /*open success*/ bool, int, error) {
 	var readCount int
+	var openSuccess bool
 	var err error
-	err = cfReader.SeekForReading(pos, func(reader io.Reader) error {
+	openSuccess, err = cfReader.SeekForReading(pos, func(reader io.Reader) error {
 		var e error
 		readCount, e = reader.Read(buf)
 		return e
 	})
-	if err != nil {
-		return readCount, err
-	}
-	return readCount, nil
+	return openSuccess, readCount, err
 }
 
-func (cfReader *ConcurrentReadFile) SeekForReading(pos int64, callback func(reader io.Reader) error) error {
+func (cfReader *ConcurrentReadFile) SeekForReading(pos int64, callback func(reader io.Reader) error) ( /*open success*/ bool, error) {
 	if callback == nil {
-		return fmt.Errorf("callball must not be nil")
+		return false, fmt.Errorf("callball must not be nil")
 	}
-	fp := <-cfReader.fileChan
+	fp, ok := <-cfReader.fileChan
+	if !ok {
+		return false, nil
+	}
 	defer func() {
 		cfReader.fileChan <- fp
 	}()
 	_, err := fp.Seek(pos, 0)
 	if err != nil {
-		return err
+		return true, err
 	}
-	return callback(fp)
+	return true, callback(fp)
 }
 
+func (cfReader *ConcurrentReadFile) ReadSeeker(callback func(reader io.ReadSeeker) error) ( /*open success*/ bool, error) {
+	if callback == nil {
+		return false, fmt.Errorf("callball must not be nil")
+	}
+	fp, ok := <-cfReader.fileChan
+	if !ok {
+		return false, nil
+	}
+	defer func() {
+		cfReader.fileChan <- fp
+	}()
+	return true, callback(fp)
+}
+
+// this will be block when wait reader
 func (cfReader *ConcurrentReadFile) Close() error {
 	for i := 0; i < cfReader.concurrentSize; i++ {
 		fp := <-cfReader.fileChan
@@ -195,11 +211,11 @@ func OpenReadWriteFile(path string, concurrentSize int) (*ReadWriteFile, error) 
 	return readWriteFile, nil
 }
 
-func (rwFile *ReadWriteFile) SeekAndReadData(position int64, buf []byte) (int, error) {
+func (rwFile *ReadWriteFile) SeekAndReadData(position int64, buf []byte) ( /*open success*/ bool, int, error) {
 	return rwFile.reader.SeekAndReadData(position, buf)
 }
 
-func (rwFile *ReadWriteFile) SeekForReading(pos int64, callback func(reader io.Reader) error) error {
+func (rwFile *ReadWriteFile) SeekForReading(pos int64, callback func(reader io.Reader) error) ( /*open success*/ bool, error) {
 	return rwFile.reader.SeekForReading(pos, callback)
 }
 
